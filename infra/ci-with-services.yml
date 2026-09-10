@@ -1,0 +1,72 @@
+# Intended .github/workflows/ci.yml with Postgres + Redis services so the timer-engine tests run in CI.
+# Claude cannot write into .github/workflows on Hawk's PC (protected). To adopt: replace .github/workflows/ci.yml with this file.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  server:
+    name: Server lint + typecheck + test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: viking
+          POSTGRES_PASSWORD: viking
+          POSTGRES_DB: viking
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U viking" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://viking:viking@localhost:5432/viking
+      REDIS_URL: redis://localhost:6379
+    defaults:
+      run:
+        working-directory: apps/server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm run lint
+      - run: npx tsc -p tsconfig.json --noEmit
+      - run: npm test
+
+  mobile:
+    name: Godot project check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "gdtoolkit==4.*"
+      - name: Project file present
+        run: test -f apps/mobile/project.godot
+      - name: GDScript lint (no scripts yet is fine)
+        run: |
+          if find apps/mobile -name "*.gd" | grep -q .; then
+            find apps/mobile -name "*.gd" -print0 | xargs -0 gdlint
+          else
+            echo "no GDScript files yet"
+          fi
+
+  contract:
+    name: OpenAPI lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npx --yes @redocly/cli@1 lint packages/shared/openapi/openapi.yaml
