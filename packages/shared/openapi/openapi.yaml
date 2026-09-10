@@ -1,0 +1,34 @@
+openapi: 3.1.0
+info:
+  title: Viking 4X API
+  version: 0.0.1
+  description: Server-authoritative API for the Viking 4X client. Contract first; clients are generated from this file.
+  license:
+    name: Proprietary
+servers:
+  - url: http://localhost:3000
+    description: Local development
+security: []
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, service]
+                properties:
+                  ok: { type: boolean }
+                  service: { type: string }

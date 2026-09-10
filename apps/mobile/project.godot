@@ -1,0 +1,22 @@
+; Engine configuration file.
+; Godot 4 project for the Viking 4X client. Scenes are added from Phase 2 (P2.I01).
+
+config_version=5
+
+[application]
+
+config/name="Viking 4X"
+config/features=PackedStringArray("4.3", "Mobile")
+run/main_scene=""
+
+[display]
+
+window/size/viewport_width=1080
+window/size/viewport_height=1920
+window/handheld/orientation=1
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[rendering]
+
+renderer/rendering_method="mobile"
