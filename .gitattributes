@@ -1,0 +1,7 @@
+# Normalise line endings: LF in the repo, LF on checkout everywhere (silences GitHub Desktop's CRLF warning).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ttf binary
+*.wav binary
+*.ogg binary

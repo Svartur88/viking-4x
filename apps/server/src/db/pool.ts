@@ -1,4 +1,7 @@
-import { Pool, type PoolClient } from "pg";
+import pg, { Pool, type PoolClient } from "pg";
+
+// bigint (int8) and count() come back as strings by default; our values stay far below 2^53.
+pg.types.setTypeParser(20, (v) => Number(v));
 
 export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
