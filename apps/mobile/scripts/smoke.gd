@@ -1,0 +1,87 @@
+extends Node
+## End-to-end smoke test of the walking skeleton, client side.
+##   godot --headless --path apps/mobile -- --smoke --api=http://localhost:3000
+## Exits 0 when a guest can sign up, see a hall, start an upgrade, and read the map;
+## non-zero with a reason otherwise. This is what CI runs so the client cannot drift
+## away from the server contract unnoticed (packages/shared/openapi).
+
+var _failures: Array[String] = []
+
+
+func check(condition: bool, what: String) -> void:
+	if condition:
+		print("  ok   ", what)
+	else:
+		_failures.append(what)
+		print("  FAIL ", what)
+
+
+func run() -> void:
+	print("Walking skeleton smoke test against ", Config.base_url)
+
+	var health: Api.Result = await Api.get_json("/health")
+	check(health.ok, "server answers /health")
+	if not health.ok:
+		return _finish()
+
+	# A fresh install every run, so placement and sign-up are genuinely exercised.
+	Config.device_id = Config._new_device_id()
+	Config.jwt = ""
+	var err: String = await Session.start_guest()
+	check(err == "", "guest sign-in (%s)" % err)
+
+	var jarl := "Smoke%d" % (Time.get_unix_time_from_system() as int % 100000)
+	err = await Session.create_player(jarl)
+	check(err == "", "sign up places a hall (%s)" % err)
+	check(not Session.hall.is_empty(), "hall came back")
+	check(Session.buildings.size() >= 3, "starter buildings: %d" % Session.buildings.size())
+
+	var skew: float = absf(Api.clock_skew)
+	check(skew < 86400.0, "server clock read (skew %.1fs)" % Api.clock_skew)
+
+	var longhouse := ""
+	for b: Dictionary in Session.buildings:
+		if str(b.get("kind", "")) == "longhouse":
+			longhouse = str(b.get("id", ""))
+	check(longhouse != "", "longhouse found")
+
+	if longhouse != "":
+		err = await Session.upgrade(longhouse)
+		check(err == "", "upgrade starts (%s)" % err)
+		var t: Dictionary = Session.timer_for(longhouse)
+		check(not t.is_empty(), "a pending timer exists for the longhouse")
+		if not t.is_empty():
+			check(Api.seconds_until(str(t.get("due_at", ""))) > 0.0, "the countdown is in the future")
+		err = await Session.upgrade(longhouse)
+		check(err != "", "a second upgrade on the same building is refused")
+
+	var hx: int = int(Session.hall.get("x", 0))
+	var hy: int = int(Session.hall.get("y", 0))
+	var chunk: Api.Result = await Api.get_json("/v1/map/chunk?cx=%d&cy=%d" % [hx / 64, hy / 64])
+	check(chunk.ok, "terrain chunk fetched")
+	if chunk.ok:
+		var bytes := Marshalls.base64_to_raw(str(chunk.data.get("tiles", "")))
+		var expected := int(chunk.data.get("w", 0)) * int(chunk.data.get("h", 0))
+		check(bytes.size() == expected, "chunk decodes to w*h bytes")
+
+	var query := "/v1/map/viewport?x0=%d&y0=%d&x1=%d&y1=%d" % [hx - 4, hy - 4, hx + 4, hy + 4]
+	var view: Api.Result = await Api.get_json(query)
+	check(view.ok, "viewport fetched")
+	if view.ok:
+		var found := false
+		for h: Dictionary in view.data.get("halls", []):
+			if str(h.get("hall_id", "")) == str(Session.hall.get("id", "")):
+				found = true
+				check(bool(h.get("shielded", false)), "own hall is under the starter shield")
+		check(found, "own hall appears on the map")
+
+	_finish()
+
+
+func _finish() -> void:
+	if _failures.is_empty():
+		print("smoke: all checks passed")
+		get_tree().quit(0)
+	else:
+		print("smoke: %d check(s) failed" % _failures.size())
+		get_tree().quit(1)

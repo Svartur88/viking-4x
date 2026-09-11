@@ -1,5 +1,7 @@
 ; Engine configuration file.
-; Godot 4 project for the Viking 4X client. Scenes are added from Phase 2 (P2.I01).
+; Godot 4 project for the Viking 4X client.
+; P2.I01 app shell, P2.I02 city view, P2.I03 world map. Grey-box art on purpose:
+; the art direction (OQ-04) is still open, and the skeleton must not wait for it.
 
 config_version=5
 
@@ -7,12 +9,21 @@ config_version=5
 
 config/name="Viking 4X"
 config/features=PackedStringArray("4.3", "Mobile")
-run/main_scene=""
+run/main_scene="res://scenes/root.tscn"
+
+[autoload]
+
+Tokens="*res://autoload/tokens.gd"
+Config="*res://autoload/config.gd"
+Session="*res://autoload/session.gd"
+Api="*res://autoload/api.gd"
 
 [display]
 
 window/size/viewport_width=1080
 window/size/viewport_height=1920
+window/size/window_width_override=540
+window/size/window_height_override=960
 window/handheld/orientation=1
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"

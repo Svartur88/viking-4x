@@ -43,23 +43,64 @@ jobs:
       - run: npm test
 
   mobile:
-    name: Godot project check
+    name: Godot client — compile, lint, and end-to-end smoke
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: viking
+          POSTGRES_PASSWORD: viking
+          POSTGRES_DB: viking
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U viking" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://viking:viking@localhost:5432/viking
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci-secret
+      GODOT: 4.3-stable
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install "gdtoolkit==4.*"
-      - name: Project file present
-        run: test -f apps/mobile/project.godot
-      - name: GDScript lint (no scripts yet is fine)
+      - name: GDScript lint
+        run: find apps/mobile -name "*.gd" -print0 | xargs -0 gdlint
+      - name: Install Godot
         run: |
-          if find apps/mobile -name "*.gd" | grep -q .; then
-            find apps/mobile -name "*.gd" -print0 | xargs -0 gdlint
-          else
-            echo "no GDScript files yet"
-          fi
+          curl -sSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT}/Godot_v${GODOT}_linux.x86_64.zip"
+          unzip -q godot.zip && mv Godot_v${GODOT}_linux.x86_64 /usr/local/bin/godot && chmod +x /usr/local/bin/godot
+      - name: Project compiles
+        run: godot --headless --quit --path apps/mobile
+      - name: Start the server and open a kingdom
+        working-directory: apps/server
+        run: |
+          npm install
+          npx tsx src/index.ts > /tmp/server.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:3000/health && break; sleep 1; done
+          cat > seed.ts <<'EOF'
+          import { pool } from "./src/db/pool.js";
+          import { createKingdom } from "./src/kingdom/service.js";
+          const open = (await pool.query("select id from kingdoms where state='open'")).rows;
+          if (!open.length) await createKingdom({ size: 256, seed: 11 });
+          await pool.end();
+          EOF
+          npx tsx seed.ts && rm seed.ts
+      - name: Client smoke test against the running server
+        run: godot --headless --path apps/mobile -- --smoke --api=http://localhost:3000
+      - name: Server log on failure
+        if: failure()
+        run: cat /tmp/server.log
 
   contract:
     name: OpenAPI lint

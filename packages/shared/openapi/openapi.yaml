@@ -47,6 +47,29 @@ components:
         kind: { type: string }
         slot: { type: integer }
         level: { type: integer }
+    MapHall:
+      type: object
+      required: [x, y, hall_id, name, level, shielded]
+      properties:
+        x: { type: integer }
+        y: { type: integer }
+        hall_id: { type: string, format: uuid }
+        player_id: { type: string, format: uuid }
+        name: { type: string }
+        level: { type: integer }
+        shielded: { type: boolean }
+    TerrainChunk:
+      description: 64x64 terrain tiles, one byte each, base64. Tile byte:0 land, 1 coast, 2 sea, 3 mountain. Immutable for the life of the kingdom.
+      type: object
+      required: [cx, cy, x0, y0, w, h, tiles]
+      properties:
+        cx: { type: integer }
+        cy: { type: integer }
+        x0: { type: integer }
+        y0: { type: integer }
+        w: { type: integer }
+        h: { type: integer }
+        tiles: { type: string, contentEncoding: base64 }
 paths:
   /health:
     get:
@@ -167,4 +190,62 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
         "422":
           description: Longhouse gate, max level, or insufficient resources
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+  /v1/map/chunk:
+    get:
+      operationId: getTerrainChunk
+      summary: One 64x64 terrain chunk; immutable, cache forever
+      parameters:
+        - name: cx
+          in: query
+          required: true
+          schema: { type: integer, minimum: 0 }
+        - name: cy
+          in: query
+          required: true
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Terrain chunk
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TerrainChunk" }
+        "400":
+          description: Chunk outside the kingdom
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+  /v1/map/viewport:
+    get:
+      operationId: getViewport
+      summary: Occupants in a rectangle (max 64x64 tiles)
+      parameters:
+        - { name: x0, in: query, required: true, schema: { type: integer } }
+        - { name: y0, in: query, required: true, schema: { type: integer } }
+        - { name: x1, in: query, required: true, schema: { type: integer } }
+        - { name: y1, in: query, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: Occupants in the clamped rectangle
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [bounds, halls, server_now]
+                properties:
+                  bounds:
+                    type: object
+                    required: [x0, y0, x1, y1]
+                    properties:
+                      x0: { type: integer }
+                      y0: { type: integer }
+                      x1: { type: integer }
+                      y1: { type: integer }
+                  halls: { type: array, items: { $ref: "#/components/schemas/MapHall" } }
+                  nodes: { type: array, items: { type: object } }
+                  camps: { type: array, items: { type: object } }
+                  holds: { type: array, items: { type: object } }
+                  banners: { type: array, items: { type: object } }
+                  marches: { type: array, items: { type: object } }
+                  server_now: { type: string, format: date-time }
+        "400":
+          description: Viewport too large
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
