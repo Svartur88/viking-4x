@@ -1,10 +1,12 @@
 extends Control
-## City view v0 (P2.I02). The hall ground, one box per building, tap for a sheet
-## with level, cost and Upgrade, and a countdown drawn against server time.
+## Hall view (P2.I02, revised for DEC-012). Your village seen at a three-quarter angle: buildings
+## stand on the ground where you left them, each with its level and, while the builders work, a
+## countdown bubble. Tap one for the upgrade sheet.
 ##
-## Grey boxes stand in for the painted village (design-language.md "Hall style") until OQ-04.
-## The important part is already real: the level, the timer and the refusal all come from
-## the server, and the countdown survives closing the app because it is due_at minus server now.
+## This is a different screen from the world map and deliberately a different projection: the map
+## is straight down, this is three-quarter (presentation-patterns.md — nine of the ten reference
+## games split it this way). Buildings with no art yet fall back to a labelled box, so the art
+## can land family by family without breaking the screen.
 
 signal navigate(screen: String)
 signal notify(message: String)
@@ -20,18 +22,31 @@ const KIND_NAMES := {
 	"wall": "Wall",
 }
 
+## Where each building stands, as a fraction of the ground plane, and how big it is relative to
+## the plane's width. The Longhouse sits high and centre because it is the heart of the hall.
+const PLOTS := {
+	"longhouse": {"at": Vector2(0.50, 0.42), "size": 0.46},
+	"farm": {"at": Vector2(0.24, 0.66), "size": 0.30},
+	"timber_camp": {"at": Vector2(0.76, 0.64), "size": 0.30},
+	"quarry": {"at": Vector2(0.22, 0.86), "size": 0.28},
+	"iron_pit": {"at": Vector2(0.78, 0.86), "size": 0.28},
+	"storehouse": {"at": Vector2(0.50, 0.78), "size": 0.26},
+	"barracks": {"at": Vector2(0.50, 0.94), "size": 0.30},
+}
+const SPARE_PLOT := {"at": Vector2(0.50, 0.58), "size": 0.26}
+
 var _resources: Label
 var _builders: Label
-var _ground: GridContainer
+var _ground: Control
 var _sheet: PanelContainer
 var _sheet_building_id := ""
-var _tiles: Dictionary = {}   ## building_id -> {panel, level, timer}
+var _plots: Dictionary = {}   ## building_id -> {node, timer_label}
 
 
 func _ready() -> void:
 	var column := VBoxContainer.new()
 	column.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	column.add_theme_constant_override("separation", Tokens.GAP)
+	column.add_theme_constant_override("separation", 0)
 	add_child(column)
 
 	var header := PanelContainer.new()
@@ -44,17 +59,12 @@ func _ready() -> void:
 	_builders = Tokens.label("", 22, Tokens.BONE)
 	header_box.add_child(_builders)
 
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	column.add_child(scroll)
-
-	_ground = GridContainer.new()
-	_ground.columns = 2
-	_ground.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_ground.add_theme_constant_override("h_separation", Tokens.GAP)
-	_ground.add_theme_constant_override("v_separation", Tokens.GAP)
-	scroll.add_child(_ground)
+	_ground = Control.new()
+	_ground.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_ground.clip_contents = true
+	_ground.draw.connect(_draw_ground)
+	_ground.resized.connect(_rebuild)
+	column.add_child(_ground)
 
 	_sheet = PanelContainer.new()
 	_sheet.add_theme_stylebox_override("panel", Tokens.panel(Tokens.TIMBER, Tokens.FIRE))
@@ -68,8 +78,16 @@ func _ready() -> void:
 	_poll_loop()
 
 
-## The server owns completion; we ask again a moment after a timer is due rather than
-## incrementing a level ourselves (PR-13: one timer engine, and the client never guesses).
+## Turf and a shoreline until the painted ground plate lands. Drawn rather than tiled so the
+## screen has somewhere for the art to go without a placeholder image in the repo.
+func _draw_ground() -> void:
+	var r := Rect2(Vector2.ZERO, _ground.size)
+	_ground.draw_rect(r, Tokens.LAND)
+	var band := r.size.y * 0.18
+	_ground.draw_rect(Rect2(0, 0, r.size.x, band), Tokens.LAND_HIGH)
+	_ground.draw_rect(Rect2(0, band, r.size.x, 3), Tokens.LAND.lightened(0.1))
+
+
 func _poll_loop() -> void:
 	while is_inside_tree():
 		await get_tree().create_timer(5.0).timeout
@@ -84,13 +102,12 @@ func _poll_loop() -> void:
 
 
 func _process(_delta: float) -> void:
-	for id: String in _tiles:
+	for id: String in _plots:
 		var t: Dictionary = Session.timer_for(id)
-		var label: Label = _tiles[id]["timer"]
-		if t.is_empty():
-			label.text = ""
-			continue
-		label.text = _countdown(Api.seconds_until(str(t.get("due_at", ""))))
+		var label: Label = _plots[id]["timer"]
+		label.visible = not t.is_empty()
+		if not t.is_empty():
+			label.text = _countdown(Api.seconds_until(str(t.get("due_at", ""))))
 	if _sheet.visible and _sheet_building_id != "":
 		_refresh_sheet()
 
@@ -114,36 +131,86 @@ func _rebuild() -> void:
 
 	for child in _ground.get_children():
 		child.queue_free()
-	_tiles.clear()
+	_plots.clear()
+	if _ground.size.x <= 0.0:
+		return
 
-	for b: Dictionary in Session.buildings:
-		var id := str(b.get("id", ""))
-		var tile := PanelContainer.new()
-		tile.custom_minimum_size = Vector2(0, 180)
-		tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		tile.add_theme_stylebox_override("panel", Tokens.panel(Tokens.LAND, Tokens.TIMBER))
-		var box := VBoxContainer.new()
-		box.alignment = BoxContainer.ALIGNMENT_CENTER
-		tile.add_child(box)
-		var kind := str(b.get("kind", ""))
-		var title := Tokens.label(KIND_NAMES.get(kind, kind.capitalize()), 28)
-		title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		box.add_child(title)
-		var level := Tokens.label("Level %d" % int(b.get("level", 1)), 24, Tokens.BONE)
-		level.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		box.add_child(level)
-		var timer := Tokens.label("", 24, Tokens.FIRE)
-		timer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		box.add_child(timer)
+	# Far buildings first, so nearer ones overlap them correctly.
+	var ordered: Array = Session.buildings.duplicate()
+	ordered.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return _plot_for(str(a.get("kind", ""))).at.y < _plot_for(str(b.get("kind", ""))).at.y)
 
-		var button := Button.new()
-		button.flat = true
-		button.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		button.pressed.connect(_open_sheet.bind(id))
-		tile.add_child(button)
+	for b: Dictionary in ordered:
+		_place(b)
 
-		_tiles[id] = {"level": level, "timer": timer}
-		_ground.add_child(tile)
+
+func _plot_for(kind: String) -> Dictionary:
+	var p: Variant = PLOTS.get(kind, SPARE_PLOT)
+	return {"at": p["at"], "size": p["size"]}
+
+
+func _place(b: Dictionary) -> void:
+	var id := str(b.get("id", ""))
+	var kind := str(b.get("kind", ""))
+	var level := int(b.get("level", 1))
+	var plot := _plot_for(kind)
+	var width: float = _ground.size.x * float(plot["size"])
+	var centre: Vector2 = Vector2(plot["at"]) * _ground.size
+
+	var holder := Control.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ground.add_child(holder)
+
+	var tex := Art.building(kind, level)
+	var art_height := width * 0.75
+	if tex != null:
+		# Sprites keep their own proportions; the plot only sets how wide they stand.
+		var rect := TextureRect.new()
+		rect.texture = tex
+		rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		art_height = width * float(tex.get_height()) / float(tex.get_width())
+		rect.size = Vector2(width, art_height)
+		rect.position = centre - Vector2(width * 0.5, art_height)   # stand on the plot, not centred on it
+		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		holder.add_child(rect)
+	else:
+		var box := PanelContainer.new()
+		box.add_theme_stylebox_override("panel", Tokens.panel(Tokens.LAND.darkened(0.15), Tokens.TIMBER))
+		box.size = Vector2(width, art_height)
+		box.position = centre - Vector2(width * 0.5, art_height)
+		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var name_label := Tokens.label(KIND_NAMES.get(kind, kind.capitalize()), 24)
+		name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		box.add_child(name_label)
+		holder.add_child(box)
+
+	# Level plate at the foot of the building, timer bubble above its roof.
+	var caption := "%s %d" % [KIND_NAMES.get(kind, kind.capitalize()), level]
+	var plate := Tokens.label(caption, 20, Tokens.BONE)
+	plate.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	plate.size = Vector2(width, 24)
+	plate.position = centre - Vector2(width * 0.5, -2)
+	plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_child(plate)
+
+	var timer := Tokens.label("", 22, Tokens.FIRE)
+	timer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	timer.size = Vector2(width, 26)
+	timer.position = centre - Vector2(width * 0.5, art_height + 28)
+	timer.visible = false
+	timer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_child(timer)
+
+	var button := Button.new()
+	button.flat = true
+	button.size = Vector2(width, art_height + 26)
+	button.position = centre - Vector2(width * 0.5, art_height)
+	button.pressed.connect(_open_sheet.bind(id))
+	holder.add_child(button)
+
+	_plots[id] = {"timer": timer}
 
 
 func _open_sheet(building_id: String) -> void:

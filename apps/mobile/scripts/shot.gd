@@ -30,6 +30,13 @@ func run(root: Control) -> void:
 	await _settle(2.5)
 	_save("map")
 
+	# Close in, where the ground detail lives.
+	var near: Control = root.current_screen()
+	if near != null and near.has_method("_zoom_at"):
+		near.call("_zoom_at", near.size * 0.5, 2.6)
+		await _settle(2.0)
+		_save("map-near")
+
 	# Pull all the way out: the kingdom band (DEC-011).
 	var screen: Control = root.current_screen()
 	if screen != null and screen.has_method("_show_whole_kingdom"):

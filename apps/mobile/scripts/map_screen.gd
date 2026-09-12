@@ -20,6 +20,12 @@ const BAND_NEAR := 24.0    ## >= this: labels and full interaction
 const BAND_KINGDOM := 8.0  ## < this: stop drawing tiles, draw the one rendered kingdom image
 const FLY_DOWN_ZOOM := 16.0
 
+## Ground detail belongs to the Near band only (DEC-011). Zoomed out, a photographic material
+## squeezed into twelve pixels a tile reads as either a repeating grid or as static, and neither
+## helps you find anything — so Mid uses the flat token colours, which stay legible. Close in, each
+## tile shows one window of the material, marching in order so neighbouring tiles join up.
+const MATERIAL_WINDOWS := 4
+
 var _camera := Vector2.ZERO      ## top-left of the view, in tiles
 var _zoom := 12.0                ## pixels per tile
 var _chunks: Dictionary = {}     ## "cx,cy" -> PackedByteArray
@@ -230,30 +236,61 @@ func _draw_map() -> void:
 	var y1 := int(ceil(_camera.y + across.y))
 	_canvas.draw_rect(Rect2(Vector2.ZERO, size), Tokens.INK)
 
+	# Detail only when it can be seen; below that, colour beats texture.
+	var painted := Art.has_terrain() and _zoom >= BAND_NEAR
 	for y in range(y0, y1):
 		for x in range(x0, x1):
 			var t := _terrain_at(x, y)
 			if t < 0:
 				continue
 			var pos := (Vector2(x, y) - _camera) * _zoom
-			_canvas.draw_rect(Rect2(pos, Vector2(_zoom, _zoom) + Vector2.ONE), Tokens.TERRAIN[t])
+			var cell := Rect2(pos, Vector2(_zoom, _zoom) + Vector2.ONE)
+			if painted:
+				var tex := Art.terrain(t)
+				var window: float = float(tex.get_width()) / float(MATERIAL_WINDOWS)
+				var wx := posmod(x, MATERIAL_WINDOWS)
+				var wy := posmod(y, MATERIAL_WINDOWS)
+				var src := Rect2(Vector2(wx, wy) * window, Vector2(window, window))
+				_canvas.draw_texture_rect_region(tex, cell, src)
+			else:
+				_canvas.draw_rect(cell, Tokens.TERRAIN[t])
 
 	var mine := str(Session.hall.get("id", ""))
+	var labelled: Array[Vector2] = []      # where a label already sits, so the next one can yield
 	for h: Dictionary in _halls:
 		var pos := (Vector2(float(h.get("x", 0)), float(h.get("y", 0))) - _camera) * _zoom
 		var own := str(h.get("hall_id", "")) == mine
-		var marker := Vector2(_zoom, _zoom)
-		_canvas.draw_rect(Rect2(pos, marker), Tokens.GOLD if own else Tokens.TIMBER)
-		var edge: Color = Tokens.BONE if own else Tokens.IRON
-		_canvas.draw_rect(Rect2(pos, marker), edge, false, maxf(1.0, _zoom * 0.08))
+		var span := Vector2(_zoom, _zoom)
+		var tex := Art.marker("hall", int(h.get("level", 1)))
+		if tex != null:
+			# A roof seen from above, drawn a little larger than its tile so it reads at a glance.
+			var draw_w := _zoom * 1.6
+			var draw_h := draw_w * float(tex.get_height()) / float(tex.get_width())
+			_canvas.draw_texture_rect(tex, Rect2(pos + span * 0.5 - Vector2(draw_w, draw_h) * 0.5,
+				Vector2(draw_w, draw_h)), false)
+		else:
+			_canvas.draw_rect(Rect2(pos, span), Tokens.GOLD if own else Tokens.TIMBER)
+			var edge: Color = Tokens.BONE if own else Tokens.IRON
+			_canvas.draw_rect(Rect2(pos, span), edge, false, maxf(1.0, _zoom * 0.08))
+		if own:
+			# Yours is findable at any zoom without hunting for a name.
+			var ring_w: float = maxf(1.5, _zoom * 0.09)
+			_canvas.draw_arc(pos + span * 0.5, _zoom * 1.1, 0.0, TAU, 28, Tokens.GOLD, ring_w)
 		if bool(h.get("shielded", false)) and _zoom >= 8.0:
-			var ring := Rect2(pos - Vector2.ONE * 2, marker + Vector2.ONE * 4)
-			_canvas.draw_rect(ring, Tokens.RUNE, false, 2.0)
-		if _zoom >= 16.0:
-			var font := ThemeDB.fallback_font
-			var at := pos + Vector2(0, -4)
-			var who := str(h.get("name", ""))
-			_canvas.draw_string(font, at, who, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Tokens.BONE)
+			_canvas.draw_arc(pos + span * 0.5, _zoom * 1.35, 0.0, TAU, 24, Tokens.RUNE, 2.0)
+		# Labels: own hall first, then whoever fits. Overlapping names are dropped, never shrunk
+		# (map.md label priority).
+		if _zoom >= BAND_NEAR:
+			var at := pos + Vector2(0, -_zoom * 0.9)
+			var clear := true
+			for taken in labelled:
+				if absf(taken.y - at.y) < 18.0 and absf(taken.x - at.x) < 110.0:
+					clear = false
+			if clear or own:
+				labelled.append(at)
+				var who := str(h.get("name", ""))
+				_canvas.draw_string(ThemeDB.fallback_font, at, who,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Tokens.GOLD if own else Tokens.BONE)
 
 	var band := "near" if _zoom >= BAND_NEAR else "mid"
 	_status.text = "%d, %d   ·   %d halls in view   ·   %s" % [

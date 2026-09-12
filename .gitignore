@@ -6,7 +6,11 @@ coverage/
 !.env.example
 *.log
 .DS_Store
-# Godot
+# Godot: ignore the import cache, keep the .import files themselves — they carry the resource
+# UIDs and per-asset import settings, and a clone without them reimports with different ids.
 apps/mobile/.godot/
 apps/mobile/export/
-*.import
+
+# Raw generated sheets are a staging area, not a deliverable: the cut sprites are committed and
+# the exact prompts live in art/prompts/, so the originals can be remade rather than stored.
+apps/mobile/art/incoming/

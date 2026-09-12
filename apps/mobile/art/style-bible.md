@@ -9,7 +9,7 @@ A cold north-Atlantic coast painted by hand, seen from directly above, warm only
 
 ## Rules
 
-1. **Camera.** Straight down. The world map has no perspective and no isometric skew. Buildings are the single exception: a slight three-quarter tilt so roofs dominate but walls are readable. Never a full isometric cube.
+1. **Camera — two views, two rules (DEC-012).** The **world map** is straight down: no perspective, no isometric skew, a hand-painted chart. The **hall view** is a separate screen at a three-quarter angle, where buildings have real depth, sit on their own turf base and cast a soft shadow. The two never share a sprite: a hall on the world map is a small top-down marker, not the hall-view building shrunk. (The earlier "slight 3/4 angle on the top-down map" wording conflated the two and was wrong.)
 2. **Light.** Always from the top-left, soft. One shadow direction across the whole game. Firelight is the only warm light and it only comes from doorways, forges, and hearths — it marks where people are.
 3. **Palette.** Only the tokens in `autoload/tokens.gd`. Cold greens, slate blues, weathered timber, bone. Warmth (`FIRE`, `GOLD`) is rationed: it means "yours", "active", or "reward", never decoration.
 4. **Texture.** Soft painterly brushwork with visible grain. Not vector-flat, not photoreal, not cel-shaded anime.
@@ -23,9 +23,10 @@ A cold north-Atlantic coast painted by hand, seen from directly above, warm only
 | Family | Notes |
 |---|---|
 | Terrain | Three land tones, two sea tones, snow. Coast gets a pale foam edge — it is the most-seen art in the game, so it gets hand cleanup. |
-| Buildings | Three stages per building (levels 1–7, 8–14, 15–20), same footprint, growing height and ornament. Generate all three in one prompt so they stay siblings. |
+| Buildings (hall view) | Three-quarter angle, own turf base, soft shadow. Three stages per building (levels 1–7, 8–14, 15–20), same footprint, growing height and ornament. Generate all three in one prompt so they stay siblings. |
+| Map markers | Straight down, tiny, read at 24 px by silhouette alone. Only the hall (three stages), holds, camps and nodes need one. |
 | Ships | Longships read by sail and prow shape at small size, not by hull detail. |
-| Portraits | Layered: base face, hair, eyes, beard, marks, clothing by rarity. Children are composed from their parents' layers (genealogy.md rule 9), so every layer must fit every base face. |
+| Portraits | Photoreal inside a carved frame — paintings hanging in the hall, deliberately a different register from the painted world (DEC-012). Layered: base face, hair, eyes, beard, marks, clothing by rarity. Children are composed from their parents' layers (genealogy.md rule 9), so every layer must fit every base face. |
 | Holds | Monastery, trade town, island hold must differ in silhouette alone. |
 
 ## How assets are made

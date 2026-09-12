@@ -15,6 +15,7 @@ run/main_scene="res://scenes/root.tscn"
 
 Tokens="*res://autoload/tokens.gd"
 Config="*res://autoload/config.gd"
+Art="*res://autoload/art.gd"
 Session="*res://autoload/session.gd"
 Api="*res://autoload/api.gd"
 
