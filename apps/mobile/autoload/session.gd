@@ -10,6 +10,9 @@ var player: Dictionary = {}      ## id, name, x, y, kingdomId
 var hall: Dictionary = {}        ## row from halls: id, x, y, grain, timber, stone, iron
 var buildings: Array = []        ## [{id, kind, slot, level}]
 var timers: Array = []           ## pending timers for this hall
+var per_hour: Dictionary = {}    ## grain/timber/stone/iron produced per hour, from the server
+var storage_cap: float = 0.0     ## per resource; production stops here (economy.md rule 3)
+var resources_read_at: float = 0.0  ## unix seconds when the counts above were true
 
 
 func signed_in() -> bool:
@@ -57,10 +60,36 @@ func refresh_hall() -> String:
 	hall = r.data.get("hall", {})
 	buildings = r.data.get("buildings", [])
 	timers = r.data.get("timers", [])
+	var prod: Variant = r.data.get("production", {})
+	if typeof(prod) == TYPE_DICTIONARY:
+		per_hour = (prod as Dictionary).get("per_hour", {})
+		storage_cap = float((prod as Dictionary).get("cap", 0.0))
+	# The server settled production the instant it answered, so this is the moment the counts
+	# below are true of. The header counts on from here rather than waiting for the next read.
+	resources_read_at = Time.get_unix_time_from_system()
 	if player.is_empty():
 		player = {"id": hall.get("player_id", ""), "x": hall.get("x", 0), "y": hall.get("y", 0)}
 	hall_changed.emit()
 	return ""
+
+
+## What a resource stands at right now, counting on from the last server read at the standing
+## rate. The server is still the truth — this only keeps the header alive between reads, and it
+## stops at the cap for the same reason the server does.
+func resource_now(res: String) -> float:
+	var banked := float(hall.get(res, 0.0))
+	var rate := float(per_hour.get(res, 0.0))
+	if rate <= 0.0 or resources_read_at <= 0.0:
+		return banked
+	var elapsed: float = maxf(0.0, Time.get_unix_time_from_system() - resources_read_at)
+	var grown := banked + rate * elapsed / 3600.0
+	if storage_cap > 0.0 and banked < storage_cap:
+		return minf(grown, storage_cap)
+	return banked if storage_cap > 0.0 else grown
+
+
+func at_storage_cap(res: String) -> bool:
+	return storage_cap > 0.0 and resource_now(res) >= storage_cap
 
 
 func building_by_id(id: String) -> Dictionary:

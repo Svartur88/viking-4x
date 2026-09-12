@@ -34,6 +34,7 @@ const PLOTS := {
 	"barracks": {"at": Vector2(0.50, 0.94), "size": 0.30},
 }
 const SPARE_PLOT := {"at": Vector2(0.50, 0.58), "size": 0.26}
+const RESOURCE_NAMES := {"grain": "Grain", "timber": "Timber", "stone": "Stone", "iron": "Iron"}
 
 var _resources: Label
 var _builders: Label
@@ -69,7 +70,11 @@ func _ready() -> void:
 	_sheet = PanelContainer.new()
 	_sheet.add_theme_stylebox_override("panel", Tokens.panel(Tokens.TIMBER, Tokens.FIRE))
 	_sheet.visible = false
-	_sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	# Anchor it to the bottom edge, but do NOT freeze its height here: the preset would size the
+	# sheet to its minimum size *now*, while it is empty, and it would stay nought pixels tall
+	# for the rest of the run — a tap would open a panel with nothing visible in it.
+	_sheet.set_anchors_preset(Control.PRESET_BOTTOM_WIDE, true)
+	_sheet.minimum_size_changed.connect(_fit_sheet)
 	add_child(_sheet)
 
 	Session.hall_changed.connect(_rebuild)
@@ -102,6 +107,7 @@ func _poll_loop() -> void:
 
 
 func _process(_delta: float) -> void:
+	_draw_resources()
 	for id: String in _plots:
 		var t: Dictionary = Session.timer_for(id)
 		var label: Label = _plots[id]["timer"]
@@ -123,8 +129,7 @@ func _countdown(seconds: float) -> String:
 
 func _rebuild() -> void:
 	var hall: Dictionary = Session.hall
-	_resources.text = "Grain %s   Timber %s   Stone %s   Iron %s" % [
-		hall.get("grain", 0), hall.get("timber", 0), hall.get("stone", 0), hall.get("iron", 0)]
+	_draw_resources()
 	_builders.text = "Builders %d/%d   ·   Hall at %d, %d" % [
 		Session.BUILDERS - Session.builders_busy(), Session.BUILDERS,
 		int(hall.get("x", 0)), int(hall.get("y", 0))]
@@ -142,6 +147,36 @@ func _rebuild() -> void:
 
 	for b: Dictionary in ordered:
 		_place(b)
+
+
+## The header, redrawn every frame so the counts visibly climb. A full store says so, because a
+## player who does not notice is quietly earning nothing (economy.md rule 3).
+func _draw_resources() -> void:
+	if Session.hall.is_empty():
+		_resources.text = ""
+		return
+	var parts: PackedStringArray = []
+	for res: String in RESOURCE_NAMES:
+		var amount := Session.resource_now(res)
+		var text := "%s %s" % [RESOURCE_NAMES[res], _thousands(amount)]
+		if Session.at_storage_cap(res):
+			text += " (full)"
+		parts.append(text)
+	_resources.text = "   ".join(parts)
+
+
+## Rates run to thousands within a session, and "17431" is unreadable at a glance.
+func _thousands(value: float) -> String:
+	var n := int(floor(maxf(0.0, value)))
+	var s := str(n)
+	var out := ""
+	var count := 0
+	for i in range(s.length() - 1, -1, -1):
+		out = s[i] + out
+		count += 1
+		if count % 3 == 0 and i > 0:
+			out = "," + out
+	return out
 
 
 func _plot_for(kind: String) -> Dictionary:
@@ -233,10 +268,17 @@ func _refresh_sheet(rebuild: bool = false) -> void:
 			count.text = "" if t.is_empty() else "Ready in " + left
 		var act: Button = _sheet.get_meta("action") as Button
 		if act != null:
-			act.disabled = not t.is_empty()
+			# Re-checked every frame: production may make it affordable while the sheet is open.
+			act.disabled = not t.is_empty() or not _can_afford(b)
+		var short: Label = _sheet.get_meta("shortfall") as Label
+		if short != null:
+			short.text = _shortfall_text(b)
 		return
 
+	# Detach before freeing: queue_free() is deferred, so the old rows would still be counted when
+	# the sheet's height is measured a few lines below.
 	for child in _sheet.get_children():
+		_sheet.remove_child(child)
 		child.queue_free()
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", Tokens.GAP)
@@ -247,12 +289,21 @@ func _refresh_sheet(rebuild: bool = false) -> void:
 	var level := int(b.get("level", 1))
 	box.add_child(Tokens.label("Level %d  →  %d" % [level, level + 1], 26, Tokens.BONE))
 
+	var raw_cost: Variant = b.get("next_cost")
+	var cost: Dictionary = raw_cost if typeof(raw_cost) == TYPE_DICTIONARY else {}
+	if not cost.is_empty():
+		box.add_child(Tokens.label(_cost_text(cost), 24, Tokens.TIMBER_LIGHT))
+
 	var countdown := Tokens.label("", 26, Tokens.FIRE)
 	box.add_child(countdown)
 	_sheet.set_meta("countdown", countdown)
 
+	var shortfall := Tokens.label(_shortfall_text(b), 24, Tokens.EMBER)
+	box.add_child(shortfall)
+	_sheet.set_meta("shortfall", shortfall)
+
 	var action := Tokens.button("Upgrade")
-	action.disabled = not t.is_empty()
+	action.disabled = not t.is_empty() or not _can_afford(b)
 	action.pressed.connect(_on_upgrade)
 	box.add_child(action)
 	_sheet.set_meta("action", action)
@@ -262,6 +313,59 @@ func _refresh_sheet(rebuild: bool = false) -> void:
 		_sheet.visible = false
 		_sheet_building_id = "")
 	box.add_child(close)
+
+	_fit_sheet()
+
+
+## Height the sheet to whatever it now contains. Called on every rebuild and again whenever a
+## child reports a new minimum size, since fonts and buttons settle a frame later.
+func _fit_sheet() -> void:
+	var wanted: float = _sheet.get_combined_minimum_size().y
+	_sheet.offset_left = 0.0
+	_sheet.offset_right = 0.0
+	_sheet.offset_top = -wanted
+	_sheet.offset_bottom = 0.0
+
+
+func _cost_text(cost: Dictionary) -> String:
+	var parts: PackedStringArray = []
+	for res: String in RESOURCE_NAMES:
+		var amount := float(cost.get(res, 0))
+		if amount > 0.0:
+			parts.append("%s %s" % [RESOURCE_NAMES[res], _thousands(amount)])
+	return "Costs " + "   ".join(parts)
+
+
+func _can_afford(b: Dictionary) -> bool:
+	var cost: Variant = b.get("next_cost")
+	if typeof(cost) != TYPE_DICTIONARY:
+		return false
+	for res: String in RESOURCE_NAMES:
+		if Session.resource_now(res) < float((cost as Dictionary).get(res, 0)):
+			return false
+	return true
+
+
+## Name what is missing and roughly how long the builders' own production needs to cover it, so a
+## blocked upgrade is a wait with a length rather than a dead button.
+func _shortfall_text(b: Dictionary) -> String:
+	var cost: Variant = b.get("next_cost")
+	if typeof(cost) != TYPE_DICTIONARY or _can_afford(b):
+		return ""
+	var worst := 0.0
+	var missing: PackedStringArray = []
+	for res: String in RESOURCE_NAMES:
+		var short: float = float((cost as Dictionary).get(res, 0)) - Session.resource_now(res)
+		if short <= 0.0:
+			continue
+		missing.append(RESOURCE_NAMES[res])
+		var rate := float(Session.per_hour.get(res, 0.0))
+		worst = maxf(worst, 1e9 if rate <= 0.0 else short * 3600.0 / rate)
+	if missing.is_empty():
+		return ""
+	if worst >= 1e8:
+		return "Short of " + ", ".join(missing) + " — nothing is producing it."
+	return "Short of " + ", ".join(missing) + " — about %s away." % _countdown(worst)
 
 
 func _on_upgrade() -> void:
@@ -275,4 +379,13 @@ func _on_upgrade() -> void:
 			action.disabled = false
 		return
 	_refresh_sheet(true)
-	notify.emit("The builders are at work.")
+	# Say what is actually true: one builder working reads wrong as "the builders".
+	var busy := Session.builders_busy()
+	var free := Session.BUILDERS - busy
+	var working := "A builder is at work" if busy == 1 else "%d builders are at work" % busy
+	if free <= 0:
+		notify.emit(working + " — none left idle.")
+	elif free == 1:
+		notify.emit(working + " — one builder still idle.")
+	else:
+		notify.emit(working + " — %d builders still idle." % free)

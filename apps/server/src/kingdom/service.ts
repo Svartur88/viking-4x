@@ -51,7 +51,15 @@ async function findFreeSite(c: PoolClient, kingdomId: string, size: number, terr
   throw Object.assign(new Error("KINGDOM_FULL"), { statusCode: 409 });
 }
 
-const STARTER_BUILDINGS: Array<[string, number, number]> = [["longhouse", 0, 1], ["farm", 0, 1], ["timber_camp", 0, 1]];
+/**
+ * All four producers from the first minute, not just grain and timber. Every upgrade costs stone
+ * and iron too, so a hall without a Quarry and an Iron pit spends its starter stock and can then
+ * never afford anything again — a dead end an hour into the game. buildings.md gives each hall one
+ * of each anyway. The two new ones have no art yet and fall back to labelled boxes.
+ */
+const STARTER_BUILDINGS: Array<[string, number, number]> = [
+  ["longhouse", 0, 1], ["farm", 0, 1], ["timber_camp", 0, 1], ["quarry", 0, 1], ["iron_pit", 0, 1],
+];
 
 /** Sign up: create the player and their hall on a free tile, with starter buildings. One transaction. */
 export async function signUp(accountId: string, name: string, kingdomId?: string) {

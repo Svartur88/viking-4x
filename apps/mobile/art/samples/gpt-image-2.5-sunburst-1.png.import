@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://do8wemj551jo4"
-path="res://.godot/imported/timber_camp_1.png-f04e0b3cfeaca6a6bc18046fe3e17363.ctex"
+uid="uid://p8580qr7ivv3"
+path="res://.godot/imported/gpt-image-2.5-sunburst-1.png-bd7764dae92aaa623b7d4b4858cb5893.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://art/buildings/timber_camp_1.png"
-dest_files=["res://.godot/imported/timber_camp_1.png-f04e0b3cfeaca6a6bc18046fe3e17363.ctex"]
+source_file="res://art/samples/gpt-image-2.5-sunburst-1.png"
+dest_files=["res://.godot/imported/gpt-image-2.5-sunburst-1.png-bd7764dae92aaa623b7d4b4858cb5893.ctex"]
 
 [params]
 

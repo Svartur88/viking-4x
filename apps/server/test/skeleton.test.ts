@@ -48,7 +48,7 @@ d("walking skeleton (server)", () => {
     const h = await app.inject({ method: "GET", url: "/v1/hall", headers: { authorization: `Bearer ${jwt2}` } });
     expect(h.statusCode).toBe(200);
     const body = h.json();
-    expect(body.buildings.map((b: { kind: string }) => b.kind).sort()).toEqual(["farm", "longhouse", "timber_camp"]);
+    expect(body.buildings.map((b: { kind: string }) => b.kind).sort()).toEqual(["farm", "iron_pit", "longhouse", "quarry", "timber_camp"]);
     expect(body.hall.x).toBeGreaterThan(8); // not in the sea ring
   });
 

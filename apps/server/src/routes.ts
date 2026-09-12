@@ -1,10 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { authRoutes, requireAuth } from "./auth/routes.js";
 import { signUp } from "./kingdom/service.js";
-import { startUpgrade } from "./buildings/service.js";
+import { startUpgrade, upgradeCost, upgradeSeconds } from "./buildings/service.js";
 import { pool } from "./db/pool.js";
 import { signAccess } from "./auth/jwt.js";
 import { terrainChunk, viewport, overviewPng, overviewMarkers } from "./map/service.js";
+import { settle, ratesFor } from "./economy/service.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   await authRoutes(app);
@@ -20,11 +21,22 @@ export async function registerRoutes(app: FastifyInstance) {
 
   app.get("/v1/hall", async (req) => {
     const claims = await requireAuth(req);
-    const hall = (await pool.query("select h.* from halls h join players p on p.id=h.player_id where p.id=$1", [claims.playerId])).rows[0];
-    if (!hall) throw Object.assign(new Error("NO_HALL"), { statusCode: 404 });
-    const buildings = (await pool.query("select id, kind, slot, level from buildings where hall_id=$1 order by kind, slot", [hall.id])).rows;
+    const found = (await pool.query("select h.id from halls h join players p on p.id=h.player_id where p.id=$1", [claims.playerId])).rows[0];
+    if (!found) throw Object.assign(new Error("NO_HALL"), { statusCode: 404 });
+    // Bring production up to now before answering, so the client is never shown a stale total.
+    const hall = await settle(found.id);
+    const rows = (await pool.query("select id, kind, slot, level from buildings where hall_id=$1 order by kind, slot", [hall.id])).rows;
+    // Price the next level here rather than letting the client mirror the formula: two copies of a
+    // cost curve drift the moment balance-v1.csv lands, and the client's copy would be the wrong one.
+    const buildings = rows.map((b: { kind: string; level: number }) => ({
+      ...b,
+      next_cost: b.level >= 20 ? null : upgradeCost(b.kind, b.level + 1),
+      next_seconds: b.level >= 20 ? null : upgradeSeconds(b.kind, b.level + 1),
+    }));
     const timers = (await pool.query("select id, kind, ref_type, ref_id, due_at, payload from timers where hall_id=$1 and state='pending' order by due_at", [hall.id])).rows;
-    return { hall, buildings, timers, server_now: new Date().toISOString() };
+    // The client counts up locally between reads; these are what it counts with.
+    const { perHour, cap } = ratesFor(buildings);
+    return { hall, buildings, timers, production: { per_hour: perHour, cap }, server_now: new Date().toISOString() };
   });
 
   app.post<{ Params: { id: string } }>("/v1/buildings/:id/upgrade", async (req) => {

@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { withTx } from "../db/pool.js";
 import { insertTimer, scheduleTimer, registerHandler, type TimerRow } from "../timers/engine.js";
+import { settleLocked } from "../economy/service.js";
 
 /**
  * Buildings v0 (P2.B04): Longhouse-gated upgrade with a timer. Costs and base timers are placeholders
@@ -21,8 +22,10 @@ export function upgradeSeconds(kind: string, toLevel: number) {
 
 export async function startUpgrade(hallId: string, buildingId: string) {
   const t = await withTx(async (c) => {
-    const hall = (await c.query("select * from halls where id=$1 for update", [hallId])).rows[0];
-    if (!hall) throw Object.assign(new Error("NO_HALL"), { statusCode: 404 });
+    // Settle production before checking affordability: the grain earned while the player was away
+    // is theirs to spend, and reading a stale row would refuse an upgrade they can afford.
+    await c.query("select id from halls where id=$1 for update", [hallId]);
+    const hall = await settleLocked(c, hallId);
     const b = (await c.query("select * from buildings where id=$1 and hall_id=$2 for update", [buildingId, hallId])).rows[0];
     if (!b) throw Object.assign(new Error("NO_BUILDING"), { statusCode: 404 });
     const longhouse = (await c.query("select level from buildings where hall_id=$1 and kind='longhouse'", [hallId])).rows[0].level as number;
@@ -42,6 +45,14 @@ export async function startUpgrade(hallId: string, buildingId: string) {
 
 /** Completion handler: runs inside the timer's transaction. */
 export async function onBuildComplete(c: PoolClient, t: TimerRow) {
+  // Settle first, at the OLD rate. The hours between the last read and this moment were worked by
+  // the smaller building; banking them after the level rises would quietly pay them at the new
+  // rate, and a long overnight timer would make that a large free gift.
+  // hall_id is nullable on the timer table (kingdom-wide timers have none); a build always has one.
+  if (t.hall_id) {
+    await c.query("select id from halls where id=$1 for update", [t.hall_id]);
+    await settleLocked(c, t.hall_id);
+  }
   await c.query("update buildings set level = level + 1 where id=$1", [t.ref_id]);
 }
 registerHandler("build", onBuildComplete);

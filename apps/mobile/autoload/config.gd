@@ -4,7 +4,9 @@ extends Node
 ## and it is short-lived by policy (auth/jwt.ts).
 
 const PATH := "user://config.json"
-const DEFAULT_BASE_URL := "http://localhost:3000"
+# Staging (P2.O01). The client ships pointing at the live server so a fresh install just plays;
+# Settings, or --api=, overrides it for local work.
+const DEFAULT_BASE_URL := "https://viking-4x-production.up.railway.app"
 
 var base_url: String = DEFAULT_BASE_URL
 var device_id: String = ""
