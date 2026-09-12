@@ -75,6 +75,24 @@ func run() -> void:
 				check(bool(h.get("shielded", false)), "own hall is under the starter shield")
 		check(found, "own hall appears on the map")
 
+	var overview: Api.Result = await Api.get_json("/v1/map/overview")
+	check(overview.ok, "kingdom overview markers fetched")
+	if overview.ok:
+		check(int(overview.data.get("size", 0)) > 0, "overview reports the kingdom size")
+		var own := 0
+		for h: Dictionary in overview.data.get("halls", []):
+			if bool(h.get("own", false)):
+				own += 1
+		check(own == 1, "exactly one hall is flagged as mine")
+
+	var png := await Api.get_bytes("/v1/map/overview.png")
+	check(png.size() > 100, "kingdom overview PNG fetched (%d bytes)" % png.size())
+	if png.size() > 100:
+		var image := Image.new()
+		check(image.load_png_from_buffer(png) == OK, "overview PNG decodes in the client")
+		var expected_px := int(overview.data.get("size", 0))
+		check(image.get_width() == expected_px, "overview image is one pixel per tile")
+
 	_finish()
 
 

@@ -111,6 +111,12 @@ func go(screen: String) -> void:
 	_bar.visible = screen != "auth"
 
 
+## The screen currently on show, or null. Used by the screenshot tool.
+func current_screen() -> Control:
+	var kids := _holder.get_children()
+	return kids[0] as Control if kids.size() > 0 else null
+
+
 func toast(message: String) -> void:
 	if message == "":
 		return

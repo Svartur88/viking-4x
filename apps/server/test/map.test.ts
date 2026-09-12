@@ -7,7 +7,7 @@ import { buildApp } from "../src/app.js";
 import { migrate } from "../src/db/migrate.js";
 import { pool } from "../src/db/pool.js";
 import { createKingdom } from "../src/kingdom/service.js";
-import { forgetTerrain, CHUNK } from "../src/map/service.js";
+import { forgetTerrain, forgetOverview, CHUNK } from "../src/map/service.js";
 import { shutdownTimers } from "../src/timers/engine.js";
 
 let app: Awaited<ReturnType<typeof buildApp>>; let kingdomId: string;
@@ -27,7 +27,7 @@ afterAll(async () => {
   for (const t of ["timers", "buildings", "occupants", "halls", "players"])
     await pool.query(`delete from ${t} where kingdom_id=$1`, [kingdomId]);
   await pool.query("delete from kingdoms where id=$1", [kingdomId]);
-  forgetTerrain();
+  forgetTerrain(); forgetOverview();
   await shutdownTimers(); await pool.end();
 });
 
@@ -84,8 +84,38 @@ d("map reads", () => {
     expect(off.json().bounds).toEqual({ x0: 0, y0: 0, x1: 10, y1: 10 });
   });
 
+  it("renders the whole kingdom as one indexed PNG, cached forever", async () => {
+    const { auth } = await player(`K${Date.now() % 10000}`);
+    const r = await app.inject({ method: "GET", url: "/v1/map/overview.png", headers: auth });
+    expect(r.statusCode).toBe(200);
+    expect(r.headers["content-type"]).toContain("image/png");
+    expect(r.headers["cache-control"]).toContain("immutable");
+    const png = r.rawPayload;
+    expect(png.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");   // PNG signature
+    expect(png.subarray(12, 16).toString("ascii")).toBe("IHDR");
+    expect(png.readUInt32BE(16)).toBe(SIZE);                               // width  = kingdom size
+    expect(png.readUInt32BE(20)).toBe(SIZE);                               // height = kingdom size
+    expect(png[24]).toBe(8);                                               // 8-bit
+    expect(png[25]).toBe(3);                                               // indexed
+    expect(png.subarray(-8, -4).toString("ascii")).toBe("IEND");
+    expect(png.length).toBeLessThan(60_000);                               // 128x128 of four colours compresses hard
+  });
+
+  it("serves the live marker layer separately, with own hall flagged", async () => {
+    const { auth, player: p } = await player(`O${Date.now() % 10000}`);
+    const r = await app.inject({ method: "GET", url: "/v1/map/overview", headers: auth });
+    expect(r.statusCode).toBe(200);
+    const body = r.json();
+    expect(body.size).toBe(SIZE);
+    const mine = body.halls.find((h: { hall_id: string }) => h.hall_id === p.hallId);
+    expect(mine).toBeTruthy();
+    expect(mine.own).toBe(true);
+    expect(body.halls.filter((h: { own: boolean }) => h.own).length).toBe(1);
+  });
+
   it("rejects unauthenticated map calls", async () => {
     expect((await app.inject({ method: "GET", url: "/v1/map/chunk?cx=0&cy=0" })).statusCode).toBe(401);
     expect((await app.inject({ method: "GET", url: "/v1/map/viewport?x0=0&y0=0&x1=5&y1=5" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/v1/map/overview.png" })).statusCode).toBe(401);
   });
 });

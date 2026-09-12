@@ -33,7 +33,10 @@ export type Handler = (c: PoolClient, t: TimerRow) => Promise<void>;
 const handlers = new Map<string, Handler>();
 export function registerHandler(kind: TimerKind, h: Handler) { handlers.set(kind, h); }
 
-const QUEUE = "timers";
+// One Redis can host several of these at once — a dev server and a test run on the same machine,
+// say. Without distinct names their workers steal each other's jobs and both look broken for
+// reasons that take an hour to find. QUEUE_PREFIX keeps them apart; the test setup sets it.
+const QUEUE = `${process.env.QUEUE_PREFIX ?? ""}timers`;
 let connection: Redis | null = null;
 let queue: Queue | null = null;
 

@@ -27,8 +27,15 @@ func run(root: Control) -> void:
 	_save("city")
 
 	root.go("map")
-	await _settle(2.0)
+	await _settle(2.5)
 	_save("map")
+
+	# Pull all the way out: the kingdom band (DEC-011).
+	var screen: Control = root.current_screen()
+	if screen != null and screen.has_method("_show_whole_kingdom"):
+		screen.call("_show_whole_kingdom")
+		await _settle(3.0)
+		_save("kingdom")
 
 	get_tree().quit(0)
 

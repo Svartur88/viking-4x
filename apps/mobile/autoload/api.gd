@@ -47,6 +47,25 @@ func get_json(path: String) -> Result:
 	return await _request(HTTPClient.METHOD_GET, path, {})
 
 
+## Fetch raw bytes (the kingdom-view PNG). Returns an empty array on failure.
+func get_bytes(path: String) -> PackedByteArray:
+	var http := HTTPRequest.new()
+	http.timeout = 30.0
+	add_child(http)
+	var headers := PackedStringArray([])
+	if Config.jwt != "":
+		headers.append("Authorization: Bearer " + Config.jwt)
+	var err := http.request(Config.base_url + path, headers, HTTPClient.METHOD_GET, "")
+	if err != OK:
+		http.queue_free()
+		return PackedByteArray()
+	var res: Array = await http.request_completed
+	http.queue_free()
+	if int(res[0]) != HTTPRequest.RESULT_SUCCESS or int(res[1]) < 200 or int(res[1]) >= 300:
+		return PackedByteArray()
+	return res[3]
+
+
 func post_json(path: String, body: Dictionary = {}) -> Result:
 	return await _request(HTTPClient.METHOD_POST, path, body)
 

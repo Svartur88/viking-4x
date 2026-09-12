@@ -249,3 +249,49 @@ paths:
         "400":
           description: Viewport too large
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+  /v1/map/overview.png:
+    get:
+      operationId: getKingdomOverview
+      summary: The whole kingdom as one indexed PNG, one pixel per tile; immutable, cache forever
+      responses:
+        "200":
+          description: Kingdom image
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+        "401":
+          description: Unauthenticated
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+  /v1/map/overview:
+    get:
+      operationId: getKingdomOverviewMarkers
+      summary: The live layer drawn over the kingdom image — halls now, holds and territory from P4
+      responses:
+        "200":
+          description: Markers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [size, halls, server_now]
+                properties:
+                  size: { type: integer, description: Kingdom width in tiles; the image is this many pixels square }
+                  halls:
+                    type: array
+                    items:
+                      type: object
+                      required: [hall_id, x, y, name, own]
+                      properties:
+                        hall_id: { type: string, format: uuid }
+                        x: { type: integer }
+                        y: { type: integer }
+                        name: { type: string }
+                        tribe_id: { type: [string, "null"], format: uuid }
+                        own: { type: boolean }
+                  holds: { type: array, items: { type: object } }
+                  territory: { type: array, items: { type: object } }
+                  pins: { type: array, items: { type: object } }
+                  server_now: { type: string, format: date-time }
+        "401":
+          description: Unauthenticated
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }

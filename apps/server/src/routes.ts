@@ -4,7 +4,7 @@ import { signUp } from "./kingdom/service.js";
 import { startUpgrade } from "./buildings/service.js";
 import { pool } from "./db/pool.js";
 import { signAccess } from "./auth/jwt.js";
-import { terrainChunk, viewport } from "./map/service.js";
+import { terrainChunk, viewport, overviewPng, overviewMarkers } from "./map/service.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   await authRoutes(app);
@@ -41,6 +41,21 @@ export async function registerRoutes(app: FastifyInstance) {
     const chunk = await terrainChunk(claims.kingdomId!, Number(req.query.cx), Number(req.query.cy));
     reply.header("cache-control", "public, max-age=31536000, immutable");
     return chunk;
+  });
+
+  // Kingdom view (DEC-011): the picture never changes, so it is cached forever…
+  app.get("/v1/map/overview.png", async (req, reply) => {
+    const claims = await requireAuth(req);
+    const png = await overviewPng(claims.kingdomId!);
+    reply.header("content-type", "image/png");
+    reply.header("cache-control", "public, max-age=31536000, immutable");
+    return reply.send(png);
+  });
+
+  // …and the things that do change ride on top, fetched separately.
+  app.get("/v1/map/overview", async (req) => {
+    const claims = await requireAuth(req);
+    return overviewMarkers(claims.kingdomId!, claims.playerId);
   });
 
   app.get<{ Querystring: { x0?: string; y0?: string; x1?: string; y1?: string } }>("/v1/map/viewport", async (req) => {
