@@ -6,6 +6,8 @@ signal navigate(screen: String)
 signal notify(message: String)
 
 var _url: LineEdit
+var _fresh_note: Label
+var _fresh_armed := false
 
 
 func _ready() -> void:
@@ -38,6 +40,19 @@ func _ready() -> void:
 	check.pressed.connect(_check)
 	box.add_child(check)
 
+	# Start fresh (dev aid). Signing out is not enough to become a new player: guest auth keys off
+	# the device id, so signing back in hands you the same hall. Every time the starter set changes
+	# — new buildings, nodes seeded at sign-up — an existing hall silently lacks the new thing and
+	# looks broken. This makes the machine forget who it is, so the next sign-in is a real new jarl.
+	box.add_child(Tokens.label("", 12))
+	box.add_child(Tokens.label("Testing", 24, Tokens.TIMBER_LIGHT))
+	var fresh := Tokens.button("Start fresh — new jarl, new hall", false)
+	fresh.pressed.connect(_confirm_fresh)
+	box.add_child(fresh)
+	_fresh_note = Tokens.label("", 22, Tokens.EMBER)
+	_fresh_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(_fresh_note)
+
 	box.add_child(Tokens.label("", 12))
 	var out := Tokens.button("Sign out", false)
 	out.pressed.connect(func() -> void:
@@ -55,3 +70,24 @@ func _ready() -> void:
 func _check() -> void:
 	var r: Api.Result = await Api.get_json("/health")
 	notify.emit("Server is up." if r.ok else "No answer from " + Config.base_url)
+
+
+## Two taps, because the old hall cannot be got back: a new device id means the server has no way
+## to recognise the player it belonged to.
+func _confirm_fresh() -> void:
+	if not _fresh_armed:
+		_fresh_armed = true
+		_fresh_note.text = "This abandons your current hall for good. Tap again to confirm."
+		await get_tree().create_timer(6.0).timeout
+		if is_inside_tree() and _fresh_armed:
+			_fresh_armed = false
+			_fresh_note.text = ""
+		return
+	_fresh_armed = false
+	_fresh_note.text = ""
+	Config.jwt = ""
+	Config.device_id = Config._new_device_id()
+	Config.save()
+	Session.clear()
+	notify.emit("A new jarl. Claim a hall.")
+	navigate.emit("auth")

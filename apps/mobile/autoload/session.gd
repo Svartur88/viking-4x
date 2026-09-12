@@ -21,11 +21,19 @@ func signed_in() -> bool:
 	return Config.jwt != "" and not player.is_empty()
 
 
+## Forget everything about the signed-in jarl. Every field, not just the obvious four: a stale
+## march list or production rate carried into a new sign-in shows numbers belonging to someone who
+## no longer exists.
 func clear() -> void:
 	player = {}
 	hall = {}
 	buildings = []
 	timers = []
+	marches = []
+	march_slots = 1
+	per_hour = {}
+	storage_cap = 0.0
+	resources_read_at = 0.0
 
 
 ## Guest sign-in. Returns "" on success, else a message to show.
