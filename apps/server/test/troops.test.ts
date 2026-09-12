@@ -80,11 +80,22 @@ describe("choosing a crew", () => {
 
 let app: Awaited<ReturnType<typeof buildApp>>; let stop: () => Promise<void>; let kingdomId: string;
 
+/** Remember which kingdoms were open, close them for the run, and reopen them afterwards. */
+let reopen: string[] = [];
+async function closeOtherKingdoms() {
+  const { rows } = await pool.query("select id from kingdoms where state='open'");
+  reopen = rows.map((r: { id: string }) => r.id);
+  if (reopen.length) await pool.query("update kingdoms set state='full' where id = any($1)", [reopen]);
+}
+async function reopenKingdoms() {
+  if (reopen.length) await pool.query("update kingdoms set state='open' where id = any($1)", [reopen]);
+}
+
 beforeAll(async () => {
   if (!hasInfra) return;
   process.env.NODE_ENV = "test";
   await migrate();
-  await pool.query("update kingdoms set state='full'");
+  await closeOtherKingdoms();
   kingdomId = (await createKingdom({ size: 128, seed: 23 })).id;
   app = await buildApp(); stop = startWorker(2);
 });
@@ -95,6 +106,7 @@ afterAll(async () => {
   for (const t of ["troops", "marches", "nodes", "timers", "buildings", "occupants", "halls", "players"])
     await pool.query(`delete from ${t} where kingdom_id=$1`, [kingdomId]);
   await pool.query("delete from kingdoms where id=$1", [kingdomId]);
+  await reopenKingdoms();
   await shutdownTimers(); await pool.end();
 });
 

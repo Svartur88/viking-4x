@@ -2,22 +2,24 @@ import type { PoolClient } from "pg";
 import { withTx } from "../db/pool.js";
 import { insertTimer, scheduleTimer, registerHandler, type TimerRow } from "../timers/engine.js";
 import { settleLocked } from "../economy/service.js";
+import { UPGRADES, BUILDERS } from "../balance.js";
 
 /**
- * Buildings v0 (P2.B04): Longhouse-gated upgrade with a timer. Costs and base timers are placeholders
- * until balance-v1.csv (P3.S01) lands; the shape (gate, cost, builder, timer, handler) is final.
+ * Buildings v0 (P2.B04): Longhouse-gated upgrade with a timer. The shape (gate, cost, builder,
+ * timer, handler) is final; every number lives in balance.ts.
  */
-const BUILDERS = 2;
-
 export function upgradeCost(kind: string, toLevel: number) {
-  const k = kind === "longhouse" ? 2.0 : 1.0;
-  const base = Math.round(50 * k * Math.pow(toLevel, 1.8));
+  const k = kind === "longhouse" ? UPGRADES.longhouseCostMultiplier : 1.0;
+  const base = Math.round(UPGRADES.costBase * k * Math.pow(toLevel, UPGRADES.costExponent));
   return { grain: base, timber: base, stone: Math.round(base * 0.4), iron: Math.round(base * 0.2) };
 }
 export function upgradeSeconds(kind: string, toLevel: number) {
-  const k = kind === "longhouse" ? 3 : 1;
-  if (toLevel <= 8) return Math.min(600, Math.round(10 * k * Math.pow(toLevel, 1.6)));  // first session stays under ~2 h total
-  return Math.min(7 * 86400, Math.round(60 * k * Math.pow(toLevel, 2.2)));            // 7-day cap (PR-04)
+  const k = kind === "longhouse" ? UPGRADES.longhouseTimeMultiplier : 1;
+  if (toLevel <= UPGRADES.earlyLevelsThrough)
+    return Math.min(UPGRADES.earlyTimeCapSeconds,
+      Math.round(UPGRADES.timeBase * k * Math.pow(toLevel, UPGRADES.timeExponentEarly)));
+  return Math.min(UPGRADES.maxSeconds,
+    Math.round(UPGRADES.timeBaseLate * k * Math.pow(toLevel, UPGRADES.timeExponentLate)));
 }
 
 export async function startUpgrade(hallId: string, buildingId: string) {
@@ -31,7 +33,7 @@ export async function startUpgrade(hallId: string, buildingId: string) {
     const longhouse = (await c.query("select level from buildings where hall_id=$1 and kind='longhouse'", [hallId])).rows[0].level as number;
     const toLevel = b.level + 1;
     if (b.kind !== "longhouse" && toLevel > longhouse) throw Object.assign(new Error("LONGHOUSE_GATE"), { statusCode: 422 });
-    if (toLevel > 20) throw Object.assign(new Error("MAX_LEVEL"), { statusCode: 422 });
+    if (toLevel > UPGRADES.maxLevel) throw Object.assign(new Error("MAX_LEVEL"), { statusCode: 422 });
     const busy = Number((await c.query("select count(*) from timers where hall_id=$1 and kind='build' and state='pending'", [hallId])).rows[0].count);
     if (busy >= BUILDERS) throw Object.assign(new Error("NO_BUILDER"), { statusCode: 409 });
     const cost = upgradeCost(b.kind, toLevel);

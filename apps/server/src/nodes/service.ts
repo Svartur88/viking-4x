@@ -13,20 +13,21 @@
 
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
+import { NODES } from "../balance.js";
 
 export type Resource = "grain" | "timber" | "stone" | "iron";
 const RESOURCES: Resource[] = ["grain", "timber", "stone", "iron"];
 
 /** Two of each resource, so no jarl is stuck unable to gather the thing they are short of. */
-const NODES_PER_HALL = 8;
-const SEED_RADIUS = 26;
+const NODES_PER_HALL = NODES.perHall;
+const SEED_RADIUS = NODES.seedRadius;
 
-/** How much sits in the ground, and how fast it comes out. Placeholders; balance-v1.csv (P3.S01). */
+/** How much sits in the ground, and how fast it comes out. Numbers live in balance.ts. */
 export function nodeAmount(level: number): number {
-  return 4000 * level;
+  return NODES.amountPerLevel * level;
 }
 export function nodeRatePerHour(level: number): number {
-  return 3000 * level;
+  return NODES.ratePerHourPerLevel * level;
 }
 
 /**

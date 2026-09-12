@@ -10,15 +10,14 @@
  * over its cap (a raid refund, a balance change) is never clamped downwards; it simply earns
  * nothing more until it spends.
  *
- * NUMBERS ARE PLACEHOLDERS. balance-v1.csv (P3.S01) sets the real ones, and it has to set them
- * together with the build timers: this build runs on a heavily compressed clock — a Longhouse
- * level 2 takes ninety seconds, not two hours — so the rates below are scaled to that same
- * compressed clock. Read them as "a minute of production is worth about this much of the next
- * upgrade", not as per-hour numbers a live game would use.
+ * The numbers are guesses and live in balance.ts, not here (DEC-015: material before numbers —
+ * there is nothing coherent to tune until every system exists, so what matters is that the guesses
+ * are all in one findable place).
  */
 
 import type { PoolClient } from "pg";
 import { pool, withTx } from "../db/pool.js";
+import { PRODUCTION } from "../balance.js";
 
 export type Resource = "grain" | "timber" | "stone" | "iron";
 
@@ -30,10 +29,9 @@ export const PRODUCERS: Record<string, Resource> = {
   iron_pit: "iron",
 };
 
-const BASE_PER_HOUR = 3600;   // level 1, i.e. one a second on the compressed clock
-const PER_LEVEL = 1.25;       // each level is a quarter better again — upgrading has to show
-const BASE_CAP = 50_000;      // with no Storehouse standing
-const CAP_PER_LEVEL = 1.35;
+// Every number below lives in balance.ts (the Auditor's single-home rule); this file only uses them.
+const { basePerHour: BASE_PER_HOUR, perLevelMultiplier: PER_LEVEL,
+        baseCap: BASE_CAP, capPerLevel: CAP_PER_LEVEL } = PRODUCTION;
 
 /** What one producer yields per hour at a given level. */
 export function ratePerHour(kind: string, level: number): number {

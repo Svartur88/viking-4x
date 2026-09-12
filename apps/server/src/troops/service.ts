@@ -15,6 +15,7 @@ import type { PoolClient } from "pg";
 import { pool, withTx } from "../db/pool.js";
 import { insertTimer, scheduleTimer, registerHandler, type TimerRow } from "../timers/engine.js";
 import { settleLocked } from "../economy/service.js";
+import { COMPRESSED_CLOCK, TROOPS } from "../balance.js";
 
 export type TroopType = "shieldwall" | "berserker" | "archer" | "longship";
 
@@ -45,8 +46,7 @@ export const TRAINS: Record<string, TroopType> = {
   shipyard: "longship",
 };
 
-/** The compressed clock, as everywhere else in this build. balance-v1.csv replaces all of it. */
-const TRAIN_TIME_DIVISOR = 5;
+const TRAIN_TIME_DIVISOR = COMPRESSED_CLOCK.trainTimeDivisor;
 
 export function trainSeconds(type: TroopType, tier: number, count: number): number {
   const per = UNITS[type].trainSeconds * TIER_TIME[tier - 1];
@@ -67,10 +67,10 @@ export function carryOf(type: TroopType, tier: number): number {
   return Math.round(UNITS[type].carry * TIER_STATS[tier - 1]);
 }
 
-/** Troop capacity of the hall (units.md rule 8: a Barracks-level table). Placeholder curve. */
+/** Troop capacity of the hall (units.md rule 8: a Barracks-level table). Curve in balance.ts. */
 export function troopCapacity(barracksLevel: number): number {
   if (barracksLevel <= 0) return 0;
-  return Math.round(200 * Math.pow(1.35, barracksLevel - 1));
+  return Math.round(TROOPS.capacityBase * Math.pow(TROOPS.capacityPerLevel, barracksLevel - 1));
 }
 
 /** Stacks standing in the hall right now. Troops on a march are not here — they are on the march. */

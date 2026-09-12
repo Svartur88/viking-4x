@@ -22,28 +22,40 @@ const KIND_NAMES := {
 	"wall": "Wall",
 }
 
-## Where each building stands, as a fraction of the ground plane, and how big it is relative to
-## the plane's width. The Longhouse sits high and centre because it is the heart of the hall.
-const PLOTS := {
-	"longhouse": {"at": Vector2(0.50, 0.42), "size": 0.46},
-	"farm": {"at": Vector2(0.24, 0.66), "size": 0.30},
-	"timber_camp": {"at": Vector2(0.76, 0.64), "size": 0.30},
-	"quarry": {"at": Vector2(0.22, 0.86), "size": 0.28},
-	"iron_pit": {"at": Vector2(0.78, 0.86), "size": 0.28},
-	"storehouse": {"at": Vector2(0.50, 0.78), "size": 0.26},
-	"barracks": {"at": Vector2(0.50, 0.94), "size": 0.30},
-}
-const SPARE_PLOT := {"at": Vector2(0.50, 0.58), "size": 0.26}
+## The painted ground the whole hall stands on. Every building position in the server catalogue is a
+## fraction of THIS image, so the ground keeps the plate's shape exactly — letterbox it or crop it
+## and the Naust stops being on the beach.
+const HALL_GROUND := "res://art/hall/hall-ground.webp"
+
+## How much of the plate's height fits in the window (DEC-017). Less than one, so there is always
+## somewhere to drag to: the forest and the shore are a real distance apart. The width follows from
+## the plate's own shape rather than being chosen separately.
+const HALL_VISIBLE := 0.62
+
 const RESOURCE_NAMES := {"grain": "Grain", "timber": "Timber", "stone": "Stone", "iron": "Iron"}
 
-## Which building trains which men (units.md rule 7). Only the Barracks exists at MVP.
-const TRAINS := {"barracks": "Shieldwall", "archery_range": "Archers", "shield_hall": "Berserkers"}
+## Display names only. WHICH building trains WHOM comes from the server (Session.trains) — this
+## screen used to keep its own copy of that mapping, and two copies of one table drift.
+const UNIT_NAMES := {
+	"shieldwall": "Shieldwall",
+	"archer": "Archers",
+	"berserker": "Berserkers",
+	"longship": "Longships",
+}
 
 var _resources: Label
 var _builders: Label
-var _ground: Control
+var _view: Control            ## the window onto the hall
+var _ground: Control          ## the land, larger than the window
+var _plate: Texture2D         ## the painted ground, or null before it has been imported
+var _camera := Vector2.ZERO   ## top-left of the window, in ground pixels
+var _dragging := false
+var _drag_moved := 0.0
+var _centred_once := false
+var _hits: Array = []         ## tappable areas in ground coordinates, near to far
 var _sheet: PanelContainer
 var _sheet_building_id := ""
+var _sheet_empty_kind := ""
 var _plots: Dictionary = {}   ## building_id -> {node, timer_label}
 
 
@@ -63,12 +75,24 @@ func _ready() -> void:
 	_builders = Tokens.label("", 22, Tokens.BONE)
 	header_box.add_child(_builders)
 
+	# The hall is bigger than the screen (DEC-017). `_view` is the window onto it and does the
+	# clipping; `_ground` is the land itself, larger, and it moves under the window when dragged.
+	_view = Control.new()
+	_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_view.clip_contents = true
+	_view.gui_input.connect(_on_view_input)
+	_view.resized.connect(_on_view_resized)
+	column.add_child(_view)
+
+	# The plate may not be imported yet on a fresh clone; the ground copes with that rather than
+	# refusing to draw, so a missing texture costs the landscape and not the screen.
+	if ResourceLoader.exists(HALL_GROUND):
+		_plate = load(HALL_GROUND) as Texture2D
+
 	_ground = Control.new()
-	_ground.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_ground.clip_contents = true
+	_ground.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_ground.draw.connect(_draw_ground)
-	_ground.resized.connect(_rebuild)
-	column.add_child(_ground)
+	_view.add_child(_ground)
 
 	_sheet = PanelContainer.new()
 	_sheet.add_theme_stylebox_override("panel", Tokens.panel(Tokens.TIMBER, Tokens.FIRE))
@@ -86,14 +110,21 @@ func _ready() -> void:
 	_poll_loop()
 
 
-## Turf and a shoreline until the painted ground plate lands. Drawn rather than tiled so the
-## screen has somewhere for the art to go without a placeholder image in the repo.
+## The land inside the hall (DEC-017): forest to the left, scree up and to the right, the cleared
+## yard in the middle, fields below it, and the marsh and shore at the bottom. Bigger than the
+## window — you drag to find the rest of it.
+##
+## The painted plate, stretched over the whole ground and nothing else drawn on top of it. The flat
+## coloured bands that used to live here were a stand-in; the plate replaces them outright, and the
+## catalogue's coordinates are read off this exact image.
 func _draw_ground() -> void:
-	var r := Rect2(Vector2.ZERO, _ground.size)
-	_ground.draw_rect(r, Tokens.LAND)
-	var band := r.size.y * 0.18
-	_ground.draw_rect(Rect2(0, 0, r.size.x, band), Tokens.LAND_HIGH)
-	_ground.draw_rect(Rect2(0, band, r.size.x, 3), Tokens.LAND.lightened(0.1))
+	if _ground.size.x <= 0.0 or _ground.size.y <= 0.0:
+		return
+	if _plate == null:
+		# No plate imported yet: plain earth rather than a black hole, so the hall still reads.
+		_ground.draw_rect(Rect2(Vector2.ZERO, _ground.size), Tokens.LAND)
+		return
+	_ground.draw_texture_rect(_plate, Rect2(Vector2.ZERO, _ground.size), false)
 
 
 func _poll_loop() -> void:
@@ -146,20 +177,22 @@ func _rebuild() -> void:
 	# for a batch that had already started.
 	if _sheet.visible and _sheet_building_id != "":
 		_refresh_sheet(true)
+	elif _sheet.visible and _sheet_empty_kind != "":
+		for p: Dictionary in Session.plots:
+			if str(p.get("kind", "")) == _sheet_empty_kind:
+				_rebuild_empty_sheet(p)
 
 	for child in _ground.get_children():
 		child.queue_free()
 	_plots.clear()
+	_hits.clear()
 	if _ground.size.x <= 0.0:
 		return
 
-	# Far buildings first, so nearer ones overlap them correctly.
-	var ordered: Array = Session.buildings.duplicate()
-	ordered.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return _plot_for(str(a.get("kind", ""))).at.y < _plot_for(str(b.get("kind", ""))).at.y)
-
-	for b: Dictionary in ordered:
-		_place(b)
+	# The server sends every slot in the hall, already sorted far to near, so nearer buildings
+	# overlap further ones correctly and empty ground is drawn in its proper place.
+	for plot: Dictionary in Session.plots:
+		_place_plot(plot)
 
 
 ## The header, redrawn every frame so the counts visibly climb. A full store says so, because a
@@ -192,56 +225,80 @@ func _thousands(value: float) -> String:
 	return out
 
 
-func _plot_for(kind: String) -> Dictionary:
-	var p: Variant = PLOTS.get(kind, SPARE_PLOT)
-	return {"at": p["at"], "size": p["size"]}
-
-
-func _place(b: Dictionary) -> void:
-	var id := str(b.get("id", ""))
-	var kind := str(b.get("kind", ""))
-	var level := int(b.get("level", 1))
-	var plot := _plot_for(kind)
-	var width: float = _ground.size.x * float(plot["size"])
-	var centre: Vector2 = Vector2(plot["at"]) * _ground.size
+## One slot: the building if it stands, bare ground with its name and the level that unlocks it if
+## it does not. An empty slot is visible from the first minute — you can see where the Rune hall
+## will go long before you can build it, and that anticipation is free.
+func _place_plot(plot: Dictionary) -> void:
+	var kind := str(plot.get("kind", ""))
+	var built := bool(plot.get("built", false))
+	var level := int(plot.get("level", 0))
+	var at: Dictionary = plot.get("at", {"x": 0.5, "y": 0.5})
+	var width: float = _ground.size.x * float(plot.get("size", 0.14))
+	var centre := Vector2(float(at.get("x", 0.5)), float(at.get("y", 0.5))) * _ground.size
 
 	var holder := Control.new()
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_ground.add_child(holder)
 
-	var tex := Art.building(kind, level)
 	var art_height := width * 0.75
+	var tex: Texture2D = Art.building(kind, level) if built else null
 	if tex != null:
-		# Sprites keep their own proportions; the plot only sets how wide they stand.
 		var rect := TextureRect.new()
 		rect.texture = tex
 		rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		art_height = width * float(tex.get_height()) / float(tex.get_width())
 		rect.size = Vector2(width, art_height)
-		rect.position = centre - Vector2(width * 0.5, art_height)   # stand on the plot, not centred on it
+		rect.position = centre - Vector2(width * 0.5, art_height)
 		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		holder.add_child(rect)
 	else:
 		var box := PanelContainer.new()
-		box.add_theme_stylebox_override("panel", Tokens.panel(Tokens.LAND.darkened(0.15), Tokens.TIMBER))
+		var ready_to_build := bool(plot.get("can_found", false))
+		if built:
+			var solid := Tokens.panel(Tokens.LAND.darkened(0.15), Tokens.TIMBER)
+			box.add_theme_stylebox_override("panel", solid)
+		elif ready_to_build:
+			# Cleared ground with a stake in it: this one you could start today.
+			var cleared := Tokens.panel(Color("6B5B3E", 0.55), Tokens.FIRE)
+			box.add_theme_stylebox_override("panel", cleared)
+		else:
+			# Just ground. Something will stand here one day.
+			var bare := Tokens.panel(Color("000000", 0.18), Color("000000", 0.30))
+			box.add_theme_stylebox_override("panel", bare)
 		box.size = Vector2(width, art_height)
 		box.position = centre - Vector2(width * 0.5, art_height)
 		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var name_label := Tokens.label(KIND_NAMES.get(kind, kind.capitalize()), 24)
-		name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		box.add_child(name_label)
 		holder.add_child(box)
 
-	# Level plate at the foot of the building, timer bubble above its roof.
-	var caption := "%s %d" % [KIND_NAMES.get(kind, kind.capitalize()), level]
-	var plate := Tokens.label(caption, 20, Tokens.BONE)
+	var caption := str(plot.get("name", kind))
+	if built:
+		caption = "%s %d" % [caption, level]
+	var plate := Tokens.label(caption, 20, Tokens.BONE if built else Color(Tokens.BONE, 0.55))
 	plate.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	plate.size = Vector2(width, 24)
 	plate.position = centre - Vector2(width * 0.5, -2)
 	plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	holder.add_child(plate)
+
+	if not built:
+		var founding: Dictionary = Session.founding_timer_for(kind)
+		var note := ""
+		if not founding.is_empty():
+			note = "building  " + _countdown(Api.seconds_until(str(founding.get("due_at", ""))))
+		elif bool(plot.get("later", false)):
+			note = "not yet"
+		elif not bool(plot.get("can_found", false)):
+			note = "Longhouse %d" % int(plot.get("unlock", 1))
+		if note != "":
+			var tone: Color = Tokens.FIRE if not founding.is_empty() else Color(Tokens.BONE, 0.4)
+			var hint := Tokens.label(note, 18, tone)
+			hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			hint.size = Vector2(width, 22)
+			hint.position = centre - Vector2(width * 0.5, -24)
+			hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			holder.add_child(hint)
 
 	var timer := Tokens.label("", 22, Tokens.FIRE)
 	timer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -251,17 +308,78 @@ func _place(b: Dictionary) -> void:
 	timer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	holder.add_child(timer)
 
-	var button := Button.new()
-	button.flat = true
-	button.size = Vector2(width, art_height + 26)
-	button.position = centre - Vector2(width * 0.5, art_height)
-	button.pressed.connect(_open_sheet.bind(id))
-	holder.add_child(button)
+	# No Button here on purpose. A button would swallow the press that starts a drag, so dragging
+	# from anywhere near a building would fail to move the hall. Taps are hit-tested in
+	# _on_view_input instead, the same way the world map does it.
+	_hits.append({
+		"kind": kind,
+		"id": str(plot.get("id", "")),
+		"built": built,
+		"rect": Rect2(centre - Vector2(width * 0.5, art_height), Vector2(width, art_height + 26)),
+	})
+	if built:
+		_plots[str(plot.get("id", ""))] = {"timer": timer}
 
-	_plots[id] = {"timer": timer}
+
+## Tapping bare ground. Says what will stand here, what it is for, and either offers to start it or
+## says plainly what is in the way.
+func _open_empty_sheet(kind: String) -> void:
+	var plot: Dictionary = {}
+	for p: Dictionary in Session.plots:
+		if str(p.get("kind", "")) == kind:
+			plot = p
+	if plot.is_empty():
+		return
+	_sheet_building_id = ""
+	_sheet_empty_kind = kind
+	_sheet.visible = true
+	_rebuild_empty_sheet(plot)
+
+
+func _rebuild_empty_sheet(plot: Dictionary) -> void:
+	for child in _sheet.get_children():
+		_sheet.remove_child(child)
+		child.queue_free()
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", Tokens.GAP)
+	_sheet.add_child(box)
+
+	var kind := str(plot.get("kind", ""))
+	box.add_child(Tokens.label(str(plot.get("name", kind)), 34))
+	box.add_child(Tokens.label(str(plot.get("purpose", "")), 24, Tokens.TIMBER_LIGHT))
+
+	var founding: Dictionary = Session.founding_timer_for(kind)
+	if not founding.is_empty():
+		var left := _countdown(Api.seconds_until(str(founding.get("due_at", ""))))
+		box.add_child(Tokens.label("Being built  ·  ready in " + left, 26, Tokens.FIRE))
+	elif bool(plot.get("later", false)):
+		box.add_child(Tokens.label("Not in the game yet.", 24, Tokens.EMBER))
+	elif not bool(plot.get("can_found", false)):
+		var needs := int(plot.get("unlock", 1))
+		var have := Session.longhouse_level()
+		box.add_child(Tokens.label(
+			"Needs Longhouse %d. Yours is %d." % [needs, have], 24, Tokens.EMBER))
+	else:
+		var cost: Variant = plot.get("found_cost")
+		if typeof(cost) == TYPE_DICTIONARY:
+			box.add_child(Tokens.label(_cost_text(cost as Dictionary), 24, Tokens.TIMBER_LIGHT))
+		var start := Tokens.button("Build it")
+		start.pressed.connect(func() -> void:
+			start.disabled = true
+			var err: String = await Session.found(kind)
+			notify.emit(err if err != "" else "The builders have begun."))
+		box.add_child(start)
+
+	var close := Tokens.button("Close", false)
+	close.pressed.connect(func() -> void:
+		_sheet.visible = false
+		_sheet_empty_kind = "")
+	box.add_child(close)
+	_fit_sheet()
 
 
 func _open_sheet(building_id: String) -> void:
+	_sheet_empty_kind = ""
 	_sheet_building_id = building_id
 	_sheet.visible = true
 	_refresh_sheet(true)
@@ -410,9 +528,10 @@ func _on_upgrade() -> void:
 ## what they cost beat a number you have to reason about before you know what a Shieldwall is.
 func _add_training(box: VBoxContainer, b: Dictionary) -> void:
 	var kind := str(b.get("kind", ""))
-	if not TRAINS.has(kind):
+	var type := str(Session.trains.get(kind, ""))
+	if type == "":
 		return
-	var unit: String = TRAINS[kind]
+	var unit: String = UNIT_NAMES.get(type, type.capitalize())
 	var id := str(b.get("id", ""))
 
 	box.add_child(Tokens.label("", 8))
@@ -450,11 +569,7 @@ func _add_training(box: VBoxContainer, b: Dictionary) -> void:
 
 ## Per-man cost, straight from the server's own table so it cannot drift from what is charged.
 func _unit_cost(kind: String) -> Dictionary:
-	var type := ""
-	match kind:
-		"barracks": type = "shieldwall"
-		"archery_range": type = "archer"
-		"shield_hall": type = "berserker"
+	var type := str(Session.trains.get(kind, ""))
 	var entry: Variant = Session.unit_costs.get(type, {})
 	if typeof(entry) != TYPE_DICTIONARY:
 		return {}
@@ -482,3 +597,76 @@ func _train_cost_text(kind: String, count: int) -> String:
 		if each > 0.0:
 			parts.append("%s %s" % [RESOURCE_NAMES[res], _thousands(each * count)])
 	return "%d costs " % count + "   ".join(parts)
+
+
+func _on_view_resized() -> void:
+	if _view.size.x <= 0.0:
+		return
+	# The ground keeps the plate's own shape: the catalogue's coordinates are fractions of that
+	# image, so any stretching moves buildings off the ground they were placed on. Height is chosen
+	# first, then widened if a wide window would otherwise see past the edge of the world.
+	var aspect := 0.75
+	if _plate != null and _plate.get_height() > 0:
+		aspect = float(_plate.get_width()) / float(_plate.get_height())
+	var ground_h: float = maxf(_view.size.y / HALL_VISIBLE, _view.size.x / aspect)
+	_ground.size = Vector2(ground_h * aspect, ground_h)
+	_clamp_camera()
+	if not _centred_once:
+		_centre_on_longhouse()
+		_centred_once = true
+	_rebuild()
+
+
+## Open looking at the Longhouse. Whatever else the hall holds, that is where you live.
+func _centre_on_longhouse() -> void:
+	for plot: Dictionary in Session.plots:
+		if str(plot.get("kind", "")) == "longhouse":
+			var at: Dictionary = plot.get("at", {})
+			var spot := Vector2(float(at.get("x", 0.5)), float(at.get("y", 0.5))) * _ground.size
+			_camera = spot - _view.size * 0.5
+			_clamp_camera()
+			return
+
+
+func _clamp_camera() -> void:
+	var span := _ground.size - _view.size
+	_camera.x = clampf(_camera.x, 0.0, maxf(0.0, span.x))
+	_camera.y = clampf(_camera.y, 0.0, maxf(0.0, span.y))
+	_ground.position = -_camera
+
+
+## Press, hold and move to look around the hall. A press that barely moves is a tap and is left to
+## the buttons underneath; anything further is a drag and the buttons must not fire.
+func _on_view_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT:
+			_dragging = mb.pressed
+			if mb.pressed:
+				_drag_moved = 0.0
+			elif _drag_moved < 8.0:
+				_tap_hall(mb.position)
+	elif event is InputEventMouseMotion and _dragging:
+		var mm := event as InputEventMouseMotion
+		_drag_moved += mm.relative.length()
+		if _drag_moved > 6.0:
+			_camera -= mm.relative
+			_clamp_camera()
+
+
+## A tap inside the hall. Nearest building wins, and the ones in front are tested first so a
+## Longhouse standing over the ground behind it takes the tap rather than what it hides.
+func _tap_hall(at_view: Vector2) -> void:
+	var at := at_view + _camera
+	for i in range(_hits.size() - 1, -1, -1):
+		var hit: Dictionary = _hits[i]
+		var rect: Rect2 = hit["rect"]
+		if rect.grow(6.0).has_point(at):
+			if bool(hit["built"]):
+				_open_sheet(str(hit["id"]))
+			else:
+				_open_empty_sheet(str(hit["kind"]))
+			return
+	_sheet.visible = false
+	_sheet_empty_kind = ""
+	_sheet_building_id = ""

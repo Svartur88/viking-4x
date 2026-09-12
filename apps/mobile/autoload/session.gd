@@ -19,6 +19,7 @@ var troops: Array = []           ## stacks standing in the hall: [{type, tier, c
 var troop_capacity: int = 0      ## from the Barracks (units.md rule 8)
 var troops_committed: int = 0    ## at home + in training + away on a march
 var unit_costs: Dictionary = {}  ## per-type stats and costs, straight from the server
+var trains: Dictionary = {}      ## building kind -> troop type; from the server, never mirrored
 
 
 func signed_in() -> bool:
@@ -83,6 +84,7 @@ func refresh_hall() -> String:
 	troop_capacity = int(r.data.get("troop_capacity", 0))
 	troops_committed = int(r.data.get("troops_committed", 0))
 	unit_costs = r.data.get("unit_costs", {})
+	trains = r.data.get("trains", {})
 	var prod: Variant = r.data.get("production", {})
 	if typeof(prod) == TYPE_DICTIONARY:
 		per_hour = (prod as Dictionary).get("per_hour", {})

@@ -20,6 +20,7 @@ import { insertTimer, scheduleTimer, registerHandler, type TimerRow } from "../t
 import { settleLocked, ratesFor } from "../economy/service.js";
 import { nodeRatePerHour } from "../nodes/service.js";
 import { carryOf, adjustStack, type TroopType } from "../troops/service.js";
+import { COMPRESSED_CLOCK, MARCH_SLOTS } from "../balance.js";
 
 /**
  * What a crew can haul: the sum of its troops' carry (units.md rule 6). Composition is keyed
@@ -60,11 +61,11 @@ export function crewForHaul(stacks: { type: TroopType; tier: number; count: numb
 
 /** March slots by Longhouse level (progression.md rule 4: nothing unlocks off any other building). */
 export function marchSlots(longhouseLevel: number): number {
-  return longhouseLevel >= 18 ? 3 : longhouseLevel >= 9 ? 2 : 1;
+  if (longhouseLevel >= MARCH_SLOTS.third) return 3;
+  return longhouseLevel >= MARCH_SLOTS.second ? 2 : 1;
 }
 
-/** Tiles per hour. Placeholder; balance-v1.csv. Deliberately fast enough to watch on this build. */
-const SPEED_TILES_PER_HOUR = 900;
+const SPEED_TILES_PER_HOUR = COMPRESSED_CLOCK.marchTilesPerHour;
 
 /** Column names are interpolated into SQL below, so they come from here and nowhere else. */
 const ALLOWED_RESOURCES = new Set(["grain", "timber", "stone", "iron"]);

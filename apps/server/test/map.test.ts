@@ -13,11 +13,22 @@ import { shutdownTimers } from "../src/timers/engine.js";
 let app: Awaited<ReturnType<typeof buildApp>>; let kingdomId: string;
 const SIZE = 128;
 
+/** Remember which kingdoms were open, close them for the run, and reopen them afterwards. */
+let reopen: string[] = [];
+async function closeOtherKingdoms() {
+  const { rows } = await pool.query("select id from kingdoms where state='open'");
+  reopen = rows.map((r: { id: string }) => r.id);
+  if (reopen.length) await pool.query("update kingdoms set state='full' where id = any($1)", [reopen]);
+}
+async function reopenKingdoms() {
+  if (reopen.length) await pool.query("update kingdoms set state='open' where id = any($1)", [reopen]);
+}
+
 beforeAll(async () => {
   if (!hasInfra) return;
   process.env.NODE_ENV = "test";
   await migrate();
-  await pool.query("update kingdoms set state='full'");
+  await closeOtherKingdoms();
   kingdomId = (await createKingdom({ size: SIZE, seed: 7 })).id;
   app = await buildApp();
 });
@@ -28,6 +39,7 @@ afterAll(async () => {
     await pool.query(`delete from ${t} where kingdom_id=$1`, [kingdomId]);
   await pool.query("delete from kingdoms where id=$1", [kingdomId]);
   forgetTerrain(); forgetOverview();
+  await reopenKingdoms();
   await shutdownTimers(); await pool.end();
 });
 

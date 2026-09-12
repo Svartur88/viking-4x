@@ -7,7 +7,7 @@ import { signAccess } from "./auth/jwt.js";
 import { terrainChunk, viewport, overviewPng, overviewMarkers } from "./map/service.js";
 import { settle, ratesFor } from "./economy/service.js";
 import { sendGather, recall, activeMarches, marchSlots } from "./marches/service.js";
-import { startTraining, stacksAt, troopCapacity, troopsCommitted, UNITS } from "./troops/service.js";
+import { startTraining, stacksAt, troopCapacity, troopsCommitted, UNITS, TRAINS } from "./troops/service.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   await authRoutes(app);
@@ -49,6 +49,9 @@ export async function registerRoutes(app: FastifyInstance) {
       troop_capacity: troopCapacity(barracks),
       troops_committed: await troopsCommitted(pool, hall.id),
       unit_costs: UNITS,
+      // Which building trains whom, sent rather than mirrored: the client had its own copy and two
+      // copies of the same table disagree eventually.
+      trains: TRAINS,
       server_now: new Date().toISOString(),
     };
   });
