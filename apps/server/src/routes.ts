@@ -81,7 +81,7 @@ export async function registerRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { x0?: string; y0?: string; x1?: string; y1?: string } }>("/v1/map/viewport", async (req) => {
     const claims = await requireAuth(req);
     const q = req.query;
-    return viewport(claims.kingdomId!, { x0: Number(q.x0), y0: Number(q.y0), x1: Number(q.x1), y1: Number(q.y1) });
+    return viewport(claims.kingdomId!, { x0: Number(q.x0), y0: Number(q.y0), x1: Number(q.x1), y1: Number(q.y1) }, claims.playerId);
   });
 
   // Marches (P3.M01). Gather only for now; scout and attack join here as new kinds, not new routes.

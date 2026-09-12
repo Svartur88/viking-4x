@@ -67,6 +67,11 @@ func _in_kingdom_band() -> bool:
 func _ready() -> void:
 	_canvas = Control.new()
 	_canvas.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# Purely a surface to paint on: it must not take mouse input. A Control defaults to STOP, and a
+	# STOP control that does not handle an event ends its journey there rather than passing it to
+	# the parent — so this full-screen child silently swallowed every tap and drag meant for the
+	# map, and _gui_input below was never called at all.
+	_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_canvas.draw.connect(_draw_map)
 	add_child(_canvas)
 
@@ -406,16 +411,20 @@ func _tap(at: Vector2) -> void:
 		_clamp_camera()
 		_after_move(true)
 		return
-	for n: Dictionary in _nodes:
-		if int(n.get("x", -1)) == int(tile.x) and int(n.get("y", -1)) == int(tile.y):
-			_open_node_sheet(n)
-			return
-	for h: Dictionary in _halls:
-		if int(h.get("x", -1)) == int(tile.x) and int(h.get("y", -1)) == int(tile.y):
-			var who := str(h.get("name", "a jarl"))
-			var shield := " · under starter shield" if bool(h.get("shielded", false)) else ""
-			notify.emit("%s, Longhouse %d%s" % [who, int(h.get("level", 1)), shield])
-			return
+	# Nearest thing within reach, not the exact tile. A tile is about twelve pixels at normal zoom
+	# and a fingertip is forty; demanding an exact hit means most taps land on empty ground and the
+	# game feels broken rather than fussy.
+	var where := _camera + at / _zoom
+	var node := _nearest(_nodes, where)
+	var hall := _nearest(_halls, where)
+	if not node.is_empty() and (hall.is_empty() or _distance(node, where) <= _distance(hall, where)):
+		_open_node_sheet(node)
+		return
+	if not hall.is_empty():
+		var who := str(hall.get("name", "a jarl"))
+		var shield := " · under starter shield" if bool(hall.get("shielded", false)) else ""
+		notify.emit("%s, Longhouse %d%s" % [who, int(hall.get("level", 1)), shield])
+		return
 	_close_sheet()
 
 
@@ -519,9 +528,20 @@ func _open_node_sheet(node: Dictionary) -> void:
 	var res := str(node.get("resource", "grain"))
 	var name: String = RESOURCE_NAMES.get(res, res.capitalize())
 	box.add_child(Tokens.label("%s node, level %d" % [name, int(node.get("level", 1))], 34))
-	box.add_child(Tokens.label("%s left in the ground   ·   %s an hour" % [
+	box.add_child(Tokens.label("%s left in the ground   ·   yields %s an hour" % [
 		_thousands(float(node.get("remaining", 0))),
 		_thousands(float(node.get("rate_per_hour", 0)))], 24, Tokens.TIMBER_LIGHT))
+
+	# What the trip actually costs, so the decision is made before the march slot is spent.
+	var trip := float(node.get("round_trip_seconds", 0.0))
+	if trip > 0.0:
+		var haul := _thousands(float(node.get("would_carry", 0)))
+		box.add_child(Tokens.label("%s there   ·   %s working   ·   %s back" % [
+			_duration(float(node.get("travel_seconds", 0.0))),
+			_duration(float(node.get("gather_seconds", 0.0))),
+			_duration(float(node.get("travel_seconds", 0.0)))], 24, Tokens.BONE))
+		box.add_child(Tokens.label("They can carry %s %s, home in %s." % [
+			haul, name.to_lower(), _duration(trip)], 24, Tokens.GOLD))
 
 	var mine := _my_march_to(str(node.get("node_id", "")))
 	if not mine.is_empty():
@@ -587,3 +607,40 @@ func _thousands(value: float) -> String:
 		if count % 3 == 0 and i > 0:
 			out = "," + out
 	return out
+
+
+## How far a tap may miss and still count, in tiles. Generous when zoomed out, where a tile is
+## a few pixels across; never smaller than half a tile, so it stays precise close in.
+func _tap_reach() -> float:
+	return maxf(0.55, 26.0 / _zoom)
+
+
+func _distance(thing: Dictionary, where: Vector2) -> float:
+	var centre := Vector2(float(thing.get("x", 0)), float(thing.get("y", 0))) + Vector2(0.5, 0.5)
+	return centre.distance_to(where)
+
+
+## The closest of these within reach, or {} if the tap landed on open ground.
+func _nearest(things: Array, where: Vector2) -> Dictionary:
+	var best: Dictionary = {}
+	var best_d := _tap_reach()
+	for t: Dictionary in things:
+		var d := _distance(t, where)
+		if d <= best_d:
+			best_d = d
+			best = t
+	return best
+
+
+## A duration a person can read at a glance: "3 min", "1 h 20 min", not "0:03:00".
+func _duration(seconds: float) -> String:
+	var s := int(round(maxf(0.0, seconds)))
+	if s < 60:
+		return "%d sec" % s
+	if s < 3600:
+		return "%d min" % int(round(s / 60.0))
+	var hours := s / 3600
+	var mins := int(round((s % 3600) / 60.0))
+	if mins == 0:
+		return "%d h" % hours
+	return "%d h %d min" % [hours, mins]

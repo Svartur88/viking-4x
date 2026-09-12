@@ -5,6 +5,7 @@
  *   - occupants: small and always moving, served as a bounded rectangle.
  */
 import { nodesIn } from "../nodes/service.js";
+import { travelSeconds, carryFor } from "../marches/service.js";
 import { pool } from "../db/pool.js";
 import { encodeIndexedPng } from "./png.js";
 
@@ -97,7 +98,7 @@ export async function overviewMarkers(kingdomId: string, playerId?: string) {
 export interface Viewport { x0: number; y0: number; x1: number; y1: number }
 
 /** Occupants in a rectangle, capped at VIEWPORT_MAX per side. Nodes, camps and holds arrive in P3/P4; the shape is already here. */
-export async function viewport(kingdomId: string, v: Viewport) {
+export async function viewport(kingdomId: string, v: Viewport, playerId?: string) {
   const { size } = await kingdom(kingdomId);
   const x0 = Math.max(0, Math.min(v.x0, v.x1)), y0 = Math.max(0, Math.min(v.y0, v.y1));
   const x1 = Math.min(size - 1, Math.max(v.x0, v.x1)), y1 = Math.min(size - 1, Math.max(v.y0, v.y1));
@@ -122,7 +123,26 @@ export async function viewport(kingdomId: string, v: Viewport) {
   const halls = rows.filter((r) => r.type === "hall").map((r) => ({
     x: r.x, y: r.y, hall_id: r.ref_id, player_id: r.player_id, name: r.player_name, level: r.hall_level, shielded: r.shielded === true,
   }));
-  const nodes = await nodesIn(pool, kingdomId, x0, y0, x1, y1);
+  let nodes = await nodesIn(pool, kingdomId, x0, y0, x1, y1);
+  // Answer "how long will they be gone?" here rather than in the client. Travel and gather times
+  // both come from formulas the server owns; a second copy in GDScript would drift the day the
+  // balance sheet lands, and the player would be reading the wrong number.
+  if (playerId) {
+    const me = (await pool.query(
+      `select h.x, h.y, coalesce(lh.level, 1) as longhouse
+         from halls h
+         left join buildings lh on lh.hall_id = h.id and lh.kind = 'longhouse'
+        where h.player_id = $1`, [playerId])).rows[0];
+    if (me) {
+      const capacity = carryFor(Number(me.longhouse));
+      nodes = nodes.map((n) => {
+        const travel = travelSeconds(me.x, me.y, n.x, n.y);
+        const takeable = Math.min(capacity, n.remaining);
+        const work = Math.max(5, Math.round((takeable / n.rate_per_hour) * 3600));
+        return { ...n, travel_seconds: travel, gather_seconds: work, round_trip_seconds: travel * 2 + work, would_carry: takeable };
+      });
+    }
+  }
   // Marches crossing the rectangle (map.md rule 14). Sent whole rather than clipped: the client
   // interpolates the dot along the line, so it needs both ends even when one is off screen.
   const { rows: marchRows } = await pool.query(
