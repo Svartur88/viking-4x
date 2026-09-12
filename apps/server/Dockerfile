@@ -1,17 +1,23 @@
 # Viking 4X server (P2.O01). One image, runs anywhere Docker runs — the host is a rental, not a
-# dependency (stack.md). Build context is this directory.
+# dependency (stack.md).
+#
+# IMPORTANT: the build context is the REPOSITORY ROOT, not this directory, so every path below is
+# written from the root. Railway keeps the context at the repo root even when a service has a root
+# directory set, and a Dockerfile that assumes otherwise fails with "/package-lock.json not found".
+# Build it locally the same way:
+#     docker build -f apps/server/Dockerfile -t viking-server .
 
 FROM node:22-slim AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY apps/server/package.json apps/server/package-lock.json ./
 RUN npm ci --omit=dev
 
 FROM node:22-slim AS build
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY apps/server/package.json apps/server/package-lock.json ./
 RUN npm ci
-COPY tsconfig.json ./
-COPY src ./src
+COPY apps/server/tsconfig.json ./
+COPY apps/server/src ./src
 RUN npx tsc -p tsconfig.json --outDir dist
 
 FROM node:22-slim AS runtime
@@ -20,8 +26,8 @@ ENV NODE_ENV=production
 # Migrations are applied by the server itself on boot, so the SQL has to travel with it.
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY package.json ./
-COPY migrations ./migrations
+COPY apps/server/package.json ./
+COPY apps/server/migrations ./migrations
 
 # Never run the game as root.
 USER node

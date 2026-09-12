@@ -1,0 +1,11 @@
+**/node_modules
+**/dist
+**/.godot
+**/coverage
+apps/server/test
+apps/mobile/art/incoming
+.env
+.env.*
+!.env.example
+*.log
+.git
