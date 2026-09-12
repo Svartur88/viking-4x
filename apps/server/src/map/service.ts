@@ -5,7 +5,8 @@
  *   - occupants: small and always moving, served as a bounded rectangle.
  */
 import { nodesIn } from "../nodes/service.js";
-import { travelSeconds, carryFor } from "../marches/service.js";
+import { travelSeconds, crewForHaul } from "../marches/service.js";
+import { stacksAt } from "../troops/service.js";
 import { pool } from "../db/pool.js";
 import { encodeIndexedPng } from "./png.js";
 
@@ -129,17 +130,27 @@ export async function viewport(kingdomId: string, v: Viewport, playerId?: string
   // balance sheet lands, and the player would be reading the wrong number.
   if (playerId) {
     const me = (await pool.query(
-      `select h.x, h.y, coalesce(lh.level, 1) as longhouse
+      `select h.id as hall_id, h.x, h.y, coalesce(lh.level, 1) as longhouse
          from halls h
          left join buildings lh on lh.hall_id = h.id and lh.kind = 'longhouse'
         where h.player_id = $1`, [playerId])).rows[0];
     if (me) {
-      const capacity = carryFor(Number(me.longhouse));
+      // The estimate uses the crew that would actually be sent, so the numbers on the sheet are the
+      // numbers the march will run on — including "you have nobody to send".
+      const stacks = await stacksAt(me.hall_id);
       nodes = nodes.map((n) => {
         const travel = travelSeconds(me.x, me.y, n.x, n.y);
-        const takeable = Math.min(capacity, n.remaining);
-        const work = Math.max(5, Math.round((takeable / n.rate_per_hour) * 3600));
-        return { ...n, travel_seconds: travel, gather_seconds: work, round_trip_seconds: travel * 2 + work, would_carry: takeable };
+        const { crew, carry } = crewForHaul(stacks, n.remaining);
+        const takeable = Math.min(carry, n.remaining);
+        const work = takeable > 0 ? Math.max(5, Math.round((takeable / n.rate_per_hour) * 3600)) : 0;
+        return {
+          ...n,
+          travel_seconds: travel,
+          gather_seconds: work,
+          round_trip_seconds: takeable > 0 ? travel * 2 + work : 0,
+          would_carry: takeable,
+          would_send: crew,
+        };
       });
     }
   }

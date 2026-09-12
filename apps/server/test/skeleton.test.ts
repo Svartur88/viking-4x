@@ -23,6 +23,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!hasInfra) return;
   await app.close(); await stop();
+  await pool.query("delete from troops where kingdom_id=$1", [kingdomId]);
   await pool.query("delete from marches where kingdom_id=$1", [kingdomId]);
   await pool.query("delete from nodes where kingdom_id=$1", [kingdomId]);
   await pool.query("delete from timers where kingdom_id=$1", [kingdomId]);
@@ -50,7 +51,7 @@ d("walking skeleton (server)", () => {
     const h = await app.inject({ method: "GET", url: "/v1/hall", headers: { authorization: `Bearer ${jwt2}` } });
     expect(h.statusCode).toBe(200);
     const body = h.json();
-    expect(body.buildings.map((b: { kind: string }) => b.kind).sort()).toEqual(["farm", "iron_pit", "longhouse", "quarry", "timber_camp"]);
+    expect(body.buildings.map((b: { kind: string }) => b.kind).sort()).toEqual(["barracks", "farm", "iron_pit", "longhouse", "quarry", "timber_camp"]);
     expect(body.hall.x).toBeGreaterThan(8); // not in the sea ring
   });
 

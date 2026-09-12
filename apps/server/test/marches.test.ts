@@ -8,7 +8,9 @@ import { migrate } from "../src/db/migrate.js";
 import { pool } from "../src/db/pool.js";
 import { createKingdom } from "../src/kingdom/service.js";
 import { startWorker, shutdownTimers, completeTimer, reduceTimer } from "../src/timers/engine.js";
-import { travelSeconds, marchSlots, carryFor } from "../src/marches/service.js";
+import { travelSeconds, marchSlots } from "../src/marches/service.js";
+import { carryOf } from "../src/troops/service.js";
+import "../src/troops/service.js";
 import { nodeAmount, nodeRatePerHour } from "../src/nodes/service.js";
 import "../src/marches/service.js";
 import "../src/buildings/service.js";
@@ -54,13 +56,14 @@ afterAll(async () => {
   if (!hasInfra) return;
   await app.close(); await stop();
   await pool.query("update nodes set held_by=null where kingdom_id=$1", [kingdomId]);
-  for (const t of ["marches", "nodes", "timers", "buildings", "occupants", "halls", "players"])
+  for (const t of ["troops", "marches", "nodes", "timers", "buildings", "occupants", "halls", "players"])
     await pool.query(`delete from ${t} where kingdom_id=$1`, [kingdomId]);
   await pool.query("delete from kingdoms where id=$1", [kingdomId]);
   await shutdownTimers(); await pool.end();
 });
 
-async function newJarl() {
+/** A jarl with troops standing ready: nothing can march without them (P3.T01). */
+async function newJarl(troops = 40) {
   const g = await app.inject({ method: "POST", url: "/v1/auth/guest", payload: { device_id: randomUUID() } });
   const p = (await app.inject({
     method: "POST", url: "/v1/players",
@@ -68,7 +71,14 @@ async function newJarl() {
     payload: { name: `M${Math.floor(Math.random() * 100000)}` },
   })).json();
   const auth = { authorization: `Bearer ${p.jwt}` };
-  const hall = (await app.inject({ method: "GET", url: "/v1/hall", headers: auth })).json();
+  let hall = (await app.inject({ method: "GET", url: "/v1/hall", headers: auth })).json();
+  if (troops > 0) {
+    // Put them straight in the stack: these tests are about marching, not about training.
+    await pool.query(
+      "insert into troops (hall_id, kingdom_id, type, tier, count) values ($1,$2,'shieldwall',1,$3)",
+      [hall.hall.id, kingdomId, troops]);
+    hall = (await app.inject({ method: "GET", url: "/v1/hall", headers: auth })).json();
+  }
   return { auth, hall, playerId: p.player.playerId as string };
 }
 
@@ -119,7 +129,7 @@ d("marches against the database", () => {
     const got = Number(after.hall[node.resource]);
     expect(got).toBeGreaterThan(0);
     // It brought back what it could carry, or what was in the ground, whichever is smaller.
-    expect(got).toBeLessThanOrEqual(Math.min(carryFor(1), Number(node.remaining)) + 5);
+    expect(got).toBeLessThanOrEqual(Math.min(carryOf("shieldwall", 1) * 40, Number(node.remaining)) + 5);
   });
 
   it("one march per node: a second jarl is refused while it is held", async () => {

@@ -4,6 +4,8 @@ import { migrate } from "./db/migrate.js";
 import { newestOpenKingdom, createKingdom } from "./kingdom/service.js";
 import { startWorker, reconcile } from "./timers/engine.js";
 import "./buildings/service.js"; // registers the build handler
+import "./marches/service.js"; // registers march_arrive, gather and march_return
+import "./troops/service.js";  // registers the train handler
 
 const config = loadConfig();
 const app = await buildApp();

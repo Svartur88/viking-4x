@@ -105,29 +105,28 @@ func run() -> void:
 		kinds[str(n.get("resource", ""))] = true
 	check(kinds.size() == 4, "all four resources are gatherable nearby")
 
+	# Nothing may leave the hall without men (P3.T01): a brand-new jarl has none.
 	if not nodes.is_empty():
-		var target: Dictionary = nodes[0]
-		var res := str(target.get("resource", "grain"))
-		var before := float(Session.hall.get(res, 0))
-		var sent: String = await Session.send_gather(str(target.get("node_id", "")))
-		check(sent == "", "gather march sent (%s)" % sent)
-		check(Session.marches.size() == 1, "the march is in the air")
-		if Session.marches.size() == 1:
-			var m: Dictionary = Session.marches[0]
-			check(str(m.get("state", "")) == "travelling", "it starts out travelling")
-			check(Api.seconds_until(str(m.get("arrives_at", ""))) > 0.0, "it arrives in the future")
+		var empty_handed: String = await Session.send_gather(str(nodes[0].get("node_id", "")))
+		check(empty_handed != "", "a march with no troops is refused (%s)" % empty_handed)
 
-			# A second march with one slot must be refused.
-			if nodes.size() > 1:
-				var second: String = await Session.send_gather(str(nodes[1].get("node_id", "")))
-				check(second != "", "a second march is refused on one slot (%s)" % second)
-
-			var back: String = await Session.recall_march(str(m.get("id", "")))
-			check(back == "", "the march can be recalled (%s)" % back)
-			var after: Array = Session.marches
-			var state := str(after[0].get("state", "")) if not after.is_empty() else "gone"
-			check(state == "returning", "a recalled march is heading home")
-		check(before >= 0.0, "resources read before the march")
+	# Training: the Barracks stands from the first minute and a batch starts on a timer.
+	var barracks := ""
+	for b: Dictionary in Session.buildings:
+		if str(b.get("kind", "")) == "barracks":
+			barracks = str(b.get("id", ""))
+	check(barracks != "", "the hall has a Barracks")
+	var room := Session.troop_capacity
+	check(room > 0, "the Barracks gives the hall a troop capacity (%d)" % room)
+	if barracks != "":
+		var trained: String = await Session.train(barracks, 5)
+		check(trained == "", "a batch starts training (%s)" % trained)
+		check(Session.troops_committed == 5, "five men are committed while they train")
+		# One queue per building. Capacity is NOT checked here: with a batch already running, a
+		# refusal would say ALREADY_TRAINING and the check would pass for the wrong reason.
+		# test/troops.test.ts covers capacity properly, on a hall with an idle Barracks.
+		var again: String = await Session.train(barracks, 5)
+		check(again != "", "one queue per building: a second batch is refused")
 
 	_finish()
 

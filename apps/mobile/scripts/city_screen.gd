@@ -36,6 +36,9 @@ const PLOTS := {
 const SPARE_PLOT := {"at": Vector2(0.50, 0.58), "size": 0.26}
 const RESOURCE_NAMES := {"grain": "Grain", "timber": "Timber", "stone": "Stone", "iron": "Iron"}
 
+## Which building trains which men (units.md rule 7). Only the Barracks exists at MVP.
+const TRAINS := {"barracks": "Shieldwall", "archery_range": "Archers", "shield_hall": "Berserkers"}
+
 var _resources: Label
 var _builders: Label
 var _ground: Control
@@ -130,9 +133,19 @@ func _countdown(seconds: float) -> String:
 func _rebuild() -> void:
 	var hall: Dictionary = Session.hall
 	_draw_resources()
-	_builders.text = "Builders %d/%d   ·   Hall at %d, %d" % [
-		Session.BUILDERS - Session.builders_busy(), Session.BUILDERS,
+	var army := "no troops"
+	if Session.troop_capacity > 0:
+		army = "%d troops (%d/%d)" % [
+			Session.troops_at_home(), Session.troops_committed, Session.troop_capacity]
+	_builders.text = "Builders %d/%d   ·   %s   ·   Hall at %d, %d" % [
+		Session.BUILDERS - Session.builders_busy(), Session.BUILDERS, army,
 		int(hall.get("x", 0)), int(hall.get("y", 0))]
+
+	# The sheet shows things that just changed — troops in training, what is affordable — so it is
+	# rebuilt too, not just the ground. Refreshing only the countdown left it showing batch buttons
+	# for a batch that had already started.
+	if _sheet.visible and _sheet_building_id != "":
+		_refresh_sheet(true)
 
 	for child in _ground.get_children():
 		child.queue_free()
@@ -302,6 +315,8 @@ func _refresh_sheet(rebuild: bool = false) -> void:
 	box.add_child(shortfall)
 	_sheet.set_meta("shortfall", shortfall)
 
+	_add_training(box, b)
+
 	var action := Tokens.button("Upgrade")
 	action.disabled = not t.is_empty() or not _can_afford(b)
 	action.pressed.connect(_on_upgrade)
@@ -389,3 +404,81 @@ func _on_upgrade() -> void:
 		notify.emit(working + " — one builder still idle.")
 	else:
 		notify.emit(working + " — %d builders still idle." % free)
+
+
+## Training, for a building that trains. Batch sizes rather than a slider: three taps that each say
+## what they cost beat a number you have to reason about before you know what a Shieldwall is.
+func _add_training(box: VBoxContainer, b: Dictionary) -> void:
+	var kind := str(b.get("kind", ""))
+	if not TRAINS.has(kind):
+		return
+	var unit: String = TRAINS[kind]
+	var id := str(b.get("id", ""))
+
+	box.add_child(Tokens.label("", 8))
+	box.add_child(Tokens.label("Train %s" % unit, 28, Tokens.BONE))
+
+	var t: Dictionary = Session.training_timer_for(id)
+	if not t.is_empty():
+		var left := _countdown(Api.seconds_until(str(t.get("due_at", ""))))
+		var payload: Dictionary = t.get("payload", {})
+		box.add_child(Tokens.label("%d in training  ·  ready in %s" % [
+			int(payload.get("count", 0)), left], 24, Tokens.FIRE))
+		return
+
+	var room: int = Session.troop_capacity - Session.troops_committed
+	if room <= 0:
+		box.add_child(Tokens.label("The barracks is full. Upgrade it to hold more.", 24, Tokens.EMBER))
+		return
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", Tokens.GAP)
+	box.add_child(row)
+	for batch: int in [5, 20, 50]:
+		var n: int = mini(batch, room)
+		var button := Tokens.button("%d" % n, batch == 20)
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.disabled = not _can_pay_for(kind, n)
+		button.pressed.connect(func() -> void:
+			button.disabled = true
+			var err: String = await Session.train(id, n)
+			notify.emit(err if err != "" else "%d %s are training." % [n, unit.to_lower()]))
+		row.add_child(button)
+
+	box.add_child(Tokens.label(_train_cost_text(kind, 5), 22, Tokens.TIMBER_LIGHT))
+
+
+## Per-man cost, straight from the server's own table so it cannot drift from what is charged.
+func _unit_cost(kind: String) -> Dictionary:
+	var type := ""
+	match kind:
+		"barracks": type = "shieldwall"
+		"archery_range": type = "archer"
+		"shield_hall": type = "berserker"
+	var entry: Variant = Session.unit_costs.get(type, {})
+	if typeof(entry) != TYPE_DICTIONARY:
+		return {}
+	var cost: Variant = (entry as Dictionary).get("cost", {})
+	return cost if typeof(cost) == TYPE_DICTIONARY else {}
+
+
+func _can_pay_for(kind: String, count: int) -> bool:
+	var cost := _unit_cost(kind)
+	if cost.is_empty():
+		return true            # the server will say no if we are wrong; never block on missing data
+	for res: String in RESOURCE_NAMES:
+		if Session.resource_now(res) < float(cost.get(res, 0)) * count:
+			return false
+	return true
+
+
+func _train_cost_text(kind: String, count: int) -> String:
+	var cost := _unit_cost(kind)
+	if cost.is_empty():
+		return ""
+	var parts: PackedStringArray = []
+	for res: String in RESOURCE_NAMES:
+		var each := float(cost.get(res, 0))
+		if each > 0.0:
+			parts.append("%s %s" % [RESOURCE_NAMES[res], _thousands(each * count)])
+	return "%d costs " % count + "   ".join(parts)

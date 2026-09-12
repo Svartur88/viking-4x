@@ -54,7 +54,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!hasInfra) return;
   await app.close(); await stop();
-  for (const t of ["marches", "nodes", "timers", "buildings", "occupants", "halls", "players"])
+  for (const t of ["troops", "marches", "nodes", "timers", "buildings", "occupants", "halls", "players"])
     await pool.query(`delete from ${t} where kingdom_id=$1`, [kingdomId]);
   await pool.query("delete from kingdoms where id=$1", [kingdomId]);
   await shutdownTimers(); await pool.end();

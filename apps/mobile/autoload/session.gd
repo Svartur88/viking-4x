@@ -15,6 +15,10 @@ var storage_cap: float = 0.0     ## per resource; production stops here (economy
 var resources_read_at: float = 0.0  ## unix seconds when the counts above were true
 var marches: Array = []          ## this jarl's marches in the air
 var march_slots: int = 1         ## from the Longhouse (progression.md rule 4)
+var troops: Array = []           ## stacks standing in the hall: [{type, tier, count, carry}]
+var troop_capacity: int = 0      ## from the Barracks (units.md rule 8)
+var troops_committed: int = 0    ## at home + in training + away on a march
+var unit_costs: Dictionary = {}  ## per-type stats and costs, straight from the server
 
 
 func signed_in() -> bool:
@@ -31,6 +35,9 @@ func clear() -> void:
 	timers = []
 	marches = []
 	march_slots = 1
+	troops = []
+	troop_capacity = 0
+	troops_committed = 0
 	per_hour = {}
 	storage_cap = 0.0
 	resources_read_at = 0.0
@@ -72,6 +79,10 @@ func refresh_hall() -> String:
 	timers = r.data.get("timers", [])
 	marches = r.data.get("marches", [])
 	march_slots = int(r.data.get("march_slots", 1))
+	troops = r.data.get("troops", [])
+	troop_capacity = int(r.data.get("troop_capacity", 0))
+	troops_committed = int(r.data.get("troops_committed", 0))
+	unit_costs = r.data.get("unit_costs", {})
 	var prod: Variant = r.data.get("production", {})
 	if typeof(prod) == TYPE_DICTIONARY:
 		per_hour = (prod as Dictionary).get("per_hour", {})
@@ -133,6 +144,32 @@ func _march_message(r: Api.Result) -> String:
 		_: return r.message
 
 
+## Men standing in the hall right now, all types together.
+func troops_at_home() -> int:
+	var n := 0
+	for s: Dictionary in troops:
+		n += int(s.get("count", 0))
+	return n
+
+
+## Start a batch. Returns "" on success, else a message to show.
+func train(building_id: String, count: int) -> String:
+	var r: Api.Result = await Api.post_json("/v1/buildings/%s/train" % building_id, {"count": count})
+	if not r.ok:
+		return _train_message(r)
+	await refresh_hall()
+	return ""
+
+
+func _train_message(r: Api.Result) -> String:
+	match r.code:
+		"ALREADY_TRAINING": return "That building is already training a batch."
+		"OVER_CAPACITY": return "Your barracks cannot hold that many. Upgrade it first."
+		"INSUFFICIENT": return "Not enough resources for that many."
+		"NOT_A_TRAINER": return "That building does not train anyone."
+		_: return r.message
+
+
 func building_by_id(id: String) -> Dictionary:
 	for b in buildings:
 		if str(b.get("id", "")) == id:
@@ -147,9 +184,22 @@ func longhouse_level() -> int:
 	return 1
 
 
-## The pending timer for a building, or {} if it is not being worked on.
+## The pending BUILD timer for a building, or {} if nobody is upgrading it. Training timers hang
+## off the same building id, so the kind has to be checked or a barracks training men looks like a
+## barracks being upgraded.
 func timer_for(building_id: String) -> Dictionary:
+	return _timer_of_kind(building_id, "build")
+
+
+## The pending TRAINING timer for a building, or {}.
+func training_timer_for(building_id: String) -> Dictionary:
+	return _timer_of_kind(building_id, "train")
+
+
+func _timer_of_kind(building_id: String, kind: String) -> Dictionary:
 	for t in timers:
+		if str(t.get("kind", "")) != kind:
+			continue
 		if str(t.get("ref_type", "")) == "building" and str(t.get("ref_id", "")) == building_id:
 			return t
 	return {}

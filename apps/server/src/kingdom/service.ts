@@ -60,6 +60,10 @@ async function findFreeSite(c: PoolClient, kingdomId: string, size: number, terr
  */
 const STARTER_BUILDINGS: Array<[string, number, number]> = [
   ["longhouse", 0, 1], ["farm", 0, 1], ["timber_camp", 0, 1], ["quarry", 0, 1], ["iron_pit", 0, 1],
+  // The Barracks stands from the first minute rather than unlocking at Longhouse 3 (buildings.md).
+  // Nothing can leave the hall without troops, so gating it would mean a new jarl watching numbers
+  // rise with no way to act on them. Restore the gate when the unlock table is implemented.
+  ["barracks", 0, 1],
 ];
 
 /** Sign up: create the player and their hall on a free tile, with starter buildings. One transaction. */

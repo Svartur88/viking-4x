@@ -7,6 +7,7 @@ import { signAccess } from "./auth/jwt.js";
 import { terrainChunk, viewport, overviewPng, overviewMarkers } from "./map/service.js";
 import { settle, ratesFor } from "./economy/service.js";
 import { sendGather, recall, activeMarches, marchSlots } from "./marches/service.js";
+import { startTraining, stacksAt, troopCapacity, troopsCommitted, UNITS } from "./troops/service.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   await authRoutes(app);
@@ -38,11 +39,16 @@ export async function registerRoutes(app: FastifyInstance) {
     // The client counts up locally between reads; these are what it counts with.
     const { perHour, cap } = ratesFor(buildings);
     const longhouse = Number(buildings.find((b: { kind: string }) => b.kind === "longhouse")?.level ?? 1);
+    const barracks = Number(buildings.find((b: { kind: string }) => b.kind === "barracks")?.level ?? 0);
     return {
       hall, buildings, timers,
       production: { per_hour: perHour, cap },
       marches: await activeMarches(claims.playerId!),
       march_slots: marchSlots(longhouse),
+      troops: await stacksAt(hall.id),
+      troop_capacity: troopCapacity(barracks),
+      troops_committed: await troopsCommitted(pool, hall.id),
+      unit_costs: UNITS,
       server_now: new Date().toISOString(),
     };
   });
@@ -82,6 +88,16 @@ export async function registerRoutes(app: FastifyInstance) {
     const claims = await requireAuth(req);
     const q = req.query;
     return viewport(claims.kingdomId!, { x0: Number(q.x0), y0: Number(q.y0), x1: Number(q.x1), y1: Number(q.y1) }, claims.playerId);
+  });
+
+  // Training (P3.T01). One queue per training building, as the builders work.
+  app.post<{ Params: { id: string }; Body: { count?: number; tier?: number } }>("/v1/buildings/:id/train", async (req) => {
+    const claims = await requireAuth(req);
+    const hall = (await pool.query("select id from halls where player_id=$1", [claims.playerId])).rows[0];
+    if (!hall) throw Object.assign(new Error("NO_HALL"), { statusCode: 404 });
+    const count = Math.floor(Number(req.body?.count ?? 0));
+    const timer = await startTraining(hall.id, req.params.id, count, Math.floor(Number(req.body?.tier ?? 1)));
+    return { timer, server_now: new Date().toISOString() };
   });
 
   // Marches (P3.M01). Gather only for now; scout and attack join here as new kinds, not new routes.

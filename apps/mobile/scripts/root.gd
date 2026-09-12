@@ -13,6 +13,8 @@ const SettingsScreen := preload("res://scripts/settings_screen.gd")
 var _holder: Control
 var _bar: HBoxContainer
 var _toast: Label
+var _toast_panel: PanelContainer
+var _toast_seq := 0
 var _current := ""
 
 
@@ -59,12 +61,26 @@ func _build_chrome() -> void:
 		b.pressed.connect(go.bind(entry[1]))
 		_bar.add_child(b)
 
+	# Messages sit near the TOP. They used to sit bottom-centre, which is where every bottom sheet
+	# opens, so "the builders are at work" landed squarely on the Close button underneath it.
+	# Nothing lives along the top edge but a status line, and a message there is out of the way of
+	# the thumb as well as the sheet.
+	_toast_panel = PanelContainer.new()
+	_toast_panel.add_theme_stylebox_override("panel", Tokens.panel(Tokens.INK, Tokens.FIRE))
+	_toast_panel.set_anchors_preset(Control.PRESET_TOP_WIDE, true)
+	_toast_panel.offset_left = Tokens.PAD * 2
+	_toast_panel.offset_right = -Tokens.PAD * 2
+	_toast_panel.offset_top = Tokens.TOUCH * 1.6
+	_toast_panel.offset_bottom = Tokens.TOUCH * 1.6 + Tokens.TOUCH
+	_toast_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_toast_panel.visible = false
+	add_child(_toast_panel)
 	_toast = Tokens.label("", 24, Tokens.BONE)
 	_toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_toast.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
-	_toast.position.y -= Tokens.TOUCH * 2
-	_toast.visible = false
-	add_child(_toast)
+	_toast.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_toast.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_toast_panel.add_child(_toast)
 
 	Api.unauthorized.connect(_on_unauthorized)
 
@@ -121,11 +137,15 @@ func toast(message: String) -> void:
 	if message == "":
 		return
 	_toast.text = message
-	_toast.visible = true
+	_toast_panel.visible = true
+	# A newer message replaces an older one rather than queueing behind it, and only the newest
+	# message's timer may hide the panel — otherwise the first message's timer clears the second.
+	_toast_seq += 1
+	var mine := _toast_seq
 	var tree := get_tree()
 	await tree.create_timer(3.0).timeout
-	if is_instance_valid(_toast):
-		_toast.visible = false
+	if is_instance_valid(_toast_panel) and mine == _toast_seq:
+		_toast_panel.visible = false
 
 
 func _on_unauthorized() -> void:

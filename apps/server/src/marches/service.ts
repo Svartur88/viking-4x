@@ -19,17 +19,43 @@ import { pool, withTx } from "../db/pool.js";
 import { insertTimer, scheduleTimer, registerHandler, type TimerRow } from "../timers/engine.js";
 import { settleLocked, ratesFor } from "../economy/service.js";
 import { nodeRatePerHour } from "../nodes/service.js";
+import { carryOf, adjustStack, type TroopType } from "../troops/service.js";
 
 /**
- * Troops do not exist yet, so a gather march is crewed by the hall's own hands. Carry grows with
- * the Longhouse because that is the only progression axis in the build today. When the Barracks
- * lands this becomes the sum of the stacks' carry (units.md) and nothing else here changes.
+ * What a crew can haul: the sum of its troops' carry (units.md rule 6). Composition is keyed
+ * "type:tier" so a stack of T2 Shieldwall is distinct from T1 without a second column.
  */
-export function crewFor(longhouseLevel: number) {
-  return { hands: 10 * longhouseLevel };
+export function carryOfCrew(composition: Record<string, number>): number {
+  let total = 0;
+  for (const [key, n] of Object.entries(composition)) {
+    const [type, tier] = key.split(":");
+    total += carryOf(type as TroopType, Number(tier || 1)) * Number(n);
+  }
+  return total;
 }
-export function carryFor(longhouseLevel: number): number {
-  return 1500 * longhouseLevel;
+
+/**
+ * Pick a crew for a gathering trip: enough troops to carry what is actually there, never more.
+ * Sending a hundred men to fetch what twenty can carry wastes the hall's defence for no gain, and
+ * making the player work that out with a slider before they understand carry at all is a poor
+ * first lesson. When the send screen grows a composition picker (units.md rule 11) this becomes
+ * the default rather than the only option.
+ */
+export function crewForHaul(stacks: { type: TroopType; tier: number; count: number }[], haul: number) {
+  const crew: Record<string, number> = {};
+  let carried = 0;
+  // Best hauliers first, so the smallest number of men leaves the hall.
+  const byCarry = [...stacks].sort((a, b) => carryOf(b.type, b.tier) - carryOf(a.type, a.tier));
+  for (const s of byCarry) {
+    if (carried >= haul) break;
+    const per = carryOf(s.type, s.tier);
+    if (per <= 0) continue;
+    const need = Math.min(s.count, Math.ceil((haul - carried) / per));
+    if (need <= 0) continue;
+    crew[`${s.type}:${s.tier}`] = need;
+    carried += need * per;
+  }
+  return { crew, carry: carried };
 }
 
 /** March slots by Longhouse level (progression.md rule 4: nothing unlocks off any other building). */
@@ -97,6 +123,15 @@ export async function sendGather(playerId: string, nodeId: string) {
     if (node.held_by) throw Object.assign(new Error("NODE_OCCUPIED"), { statusCode: 409 });
     if (Number(node.remaining) <= 0) throw Object.assign(new Error("NODE_EMPTY"), { statusCode: 409 });
 
+    // Crew it from the troops actually standing in the hall. No troops, no march: gathering is
+    // something men do, and pretending otherwise is what the old placeholder did.
+    const stacks = (await c.query(
+      "select type, tier, count from troops where hall_id=$1 and count > 0 for update", [hall.id])).rows
+      .map((r: { type: string; tier: number; count: string }) => ({ type: r.type as TroopType, tier: r.tier, count: Number(r.count) }));
+    const { crew, carry } = crewForHaul(stacks, Number(node.remaining));
+    if (carry <= 0)
+      throw Object.assign(new Error("NO_TROOPS"), { statusCode: 422, details: { need: "troops to carry it" } });
+
     const id = randomUUID();
     const seconds = travelSeconds(hall.x, hall.y, node.x, node.y);
     const march = (await c.query<MarchRow>(
@@ -106,8 +141,15 @@ export async function sendGather(playerId: string, nodeId: string) {
        values ($1,$2,$3,$4,'gather','travelling',$5,$6,$7,$8,$9,$10,$11, now() + make_interval(secs => $12))
        returning *`,
       [id, hall.kingdom_id, playerId, hall.id, hall.x, hall.y, node.x, node.y, nodeId,
-        JSON.stringify(crewFor(longhouse)), carryFor(longhouse), seconds],
+        JSON.stringify(crew), carry, seconds],
     )).rows[0];
+
+    // They leave the hall. Held in the march's composition until it returns, so they cannot be
+    // sent twice, cannot defend while away, and cannot be trained over.
+    for (const [key, n] of Object.entries(crew)) {
+      const [type, tier] = key.split(":");
+      await adjustStack(c, hall.id, hall.kingdom_id, type, Number(tier), -Number(n));
+    }
 
     // Claim the node at send, not at arrival. map.md's "arrives and finds nothing" case is about
     // depletion; letting five jarls all march at one free node and four bounce is worse play than
@@ -200,6 +242,11 @@ async function onMarchReturn(c: PoolClient, t: TimerRow) {
     );
   }
   void hall;
+  // The men come home too.
+  for (const [key, n] of Object.entries(march.composition ?? {})) {
+    const [type, tier] = key.split(":");
+    await adjustStack(c, march.hall_id, march.kingdom_id, type, Number(tier), Number(n));
+  }
   await c.query("update marches set state='done', completed_at=now() where id=$1", [march.id]);
 }
 
