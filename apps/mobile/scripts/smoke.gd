@@ -93,6 +93,42 @@ func run() -> void:
 		var expected_px := int(overview.data.get("size", 0))
 		check(image.get_width() == expected_px, "overview image is one pixel per tile")
 
+	# --- marches and gathering (P3.M01) ---
+	var nx := int(Session.hall.get("x", 0))
+	var ny := int(Session.hall.get("y", 0))
+	var around := "/v1/map/viewport?x0=%d&y0=%d&x1=%d&y1=%d" % [nx - 30, ny - 30, nx + 30, ny + 30]
+	var near: Api.Result = await Api.get_json(around)
+	var nodes: Array = near.data.get("nodes", []) if near.ok else []
+	check(not nodes.is_empty(), "nodes were seeded around the new hall (%d)" % nodes.size())
+	var kinds := {}
+	for n: Dictionary in nodes:
+		kinds[str(n.get("resource", ""))] = true
+	check(kinds.size() == 4, "all four resources are gatherable nearby")
+
+	if not nodes.is_empty():
+		var target: Dictionary = nodes[0]
+		var res := str(target.get("resource", "grain"))
+		var before := float(Session.hall.get(res, 0))
+		var sent: String = await Session.send_gather(str(target.get("node_id", "")))
+		check(sent == "", "gather march sent (%s)" % sent)
+		check(Session.marches.size() == 1, "the march is in the air")
+		if Session.marches.size() == 1:
+			var m: Dictionary = Session.marches[0]
+			check(str(m.get("state", "")) == "travelling", "it starts out travelling")
+			check(Api.seconds_until(str(m.get("arrives_at", ""))) > 0.0, "it arrives in the future")
+
+			# A second march with one slot must be refused.
+			if nodes.size() > 1:
+				var second: String = await Session.send_gather(str(nodes[1].get("node_id", "")))
+				check(second != "", "a second march is refused on one slot (%s)" % second)
+
+			var back: String = await Session.recall_march(str(m.get("id", "")))
+			check(back == "", "the march can be recalled (%s)" % back)
+			var after: Array = Session.marches
+			var state := str(after[0].get("state", "")) if not after.is_empty() else "gone"
+			check(state == "returning", "a recalled march is heading home")
+		check(before >= 0.0, "resources read before the march")
+
 	_finish()
 
 

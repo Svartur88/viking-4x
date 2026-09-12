@@ -24,7 +24,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!hasInfra) return;
   await app.close();
-  for (const t of ["timers", "buildings", "occupants", "halls", "players"])
+  for (const t of ["marches", "nodes", "timers", "buildings", "occupants", "halls", "players"])
     await pool.query(`delete from ${t} where kingdom_id=$1`, [kingdomId]);
   await pool.query("delete from kingdoms where id=$1", [kingdomId]);
   forgetTerrain(); forgetOverview();
@@ -70,7 +70,12 @@ d("map reads", () => {
     expect(mine).toBeTruthy();
     expect(mine.level).toBe(1);
     expect(mine.shielded).toBe(true);          // starter shield, 72 h
-    expect(body.nodes).toEqual([]);
+    // Nodes are seeded around a new hall (P3.M01), so a viewport over one is never empty of them.
+    expect(Array.isArray(body.nodes)).toBe(true);
+    for (const n of body.nodes) {
+      expect(["grain", "timber", "stone", "iron"]).toContain(n.resource);
+      expect(n.remaining).toBeGreaterThan(0);
+    }
     expect(typeof body.server_now).toBe("string");
   });
 

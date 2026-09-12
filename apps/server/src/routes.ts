@@ -6,6 +6,7 @@ import { pool } from "./db/pool.js";
 import { signAccess } from "./auth/jwt.js";
 import { terrainChunk, viewport, overviewPng, overviewMarkers } from "./map/service.js";
 import { settle, ratesFor } from "./economy/service.js";
+import { sendGather, recall, activeMarches, marchSlots } from "./marches/service.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   await authRoutes(app);
@@ -36,7 +37,14 @@ export async function registerRoutes(app: FastifyInstance) {
     const timers = (await pool.query("select id, kind, ref_type, ref_id, due_at, payload from timers where hall_id=$1 and state='pending' order by due_at", [hall.id])).rows;
     // The client counts up locally between reads; these are what it counts with.
     const { perHour, cap } = ratesFor(buildings);
-    return { hall, buildings, timers, production: { per_hour: perHour, cap }, server_now: new Date().toISOString() };
+    const longhouse = Number(buildings.find((b: { kind: string }) => b.kind === "longhouse")?.level ?? 1);
+    return {
+      hall, buildings, timers,
+      production: { per_hour: perHour, cap },
+      marches: await activeMarches(claims.playerId!),
+      march_slots: marchSlots(longhouse),
+      server_now: new Date().toISOString(),
+    };
   });
 
   app.post<{ Params: { id: string } }>("/v1/buildings/:id/upgrade", async (req) => {
@@ -74,6 +82,26 @@ export async function registerRoutes(app: FastifyInstance) {
     const claims = await requireAuth(req);
     const q = req.query;
     return viewport(claims.kingdomId!, { x0: Number(q.x0), y0: Number(q.y0), x1: Number(q.x1), y1: Number(q.y1) });
+  });
+
+  // Marches (P3.M01). Gather only for now; scout and attack join here as new kinds, not new routes.
+  app.post<{ Body: { node_id: string } }>("/v1/marches/gather", async (req, reply) => {
+    const claims = await requireAuth(req);
+    const nodeId = (req.body?.node_id ?? "").trim();
+    if (!nodeId) return reply.code(400).send({ error: { code: "NO_NODE", message: "node_id required" } });
+    const timer = await sendGather(claims.playerId!, nodeId);
+    return { timer, marches: await activeMarches(claims.playerId!), server_now: new Date().toISOString() };
+  });
+
+  app.post<{ Params: { id: string } }>("/v1/marches/:id/recall", async (req) => {
+    const claims = await requireAuth(req);
+    const march = await recall(claims.playerId!, req.params.id);
+    return { march, marches: await activeMarches(claims.playerId!), server_now: new Date().toISOString() };
+  });
+
+  app.get("/v1/marches", async (req) => {
+    const claims = await requireAuth(req);
+    return { marches: await activeMarches(claims.playerId!), server_now: new Date().toISOString() };
   });
 
   app.setErrorHandler((err, _req, reply) => {

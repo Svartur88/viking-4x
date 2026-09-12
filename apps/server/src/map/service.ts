@@ -4,6 +4,7 @@
  *   - terrain: immutable per kingdom, served as 64×64 chunks the client caches forever;
  *   - occupants: small and always moving, served as a bounded rectangle.
  */
+import { nodesIn } from "../nodes/service.js";
 import { pool } from "../db/pool.js";
 import { encodeIndexedPng } from "./png.js";
 
@@ -121,10 +122,24 @@ export async function viewport(kingdomId: string, v: Viewport) {
   const halls = rows.filter((r) => r.type === "hall").map((r) => ({
     x: r.x, y: r.y, hall_id: r.ref_id, player_id: r.player_id, name: r.player_name, level: r.hall_level, shielded: r.shielded === true,
   }));
+  const nodes = await nodesIn(pool, kingdomId, x0, y0, x1, y1);
+  // Marches crossing the rectangle (map.md rule 14). Sent whole rather than clipped: the client
+  // interpolates the dot along the line, so it needs both ends even when one is off screen.
+  const { rows: marchRows } = await pool.query(
+    `select m.id, m.player_id, m.kind, m.state, m.origin_x, m.origin_y, m.target_x, m.target_y,
+            m.departed_at, m.arrives_at, m.returns_at, m.cargo, p.name as player_name
+       from marches m join players p on p.id = m.player_id
+      where m.kingdom_id=$1 and m.state in ('travelling','gathering','returning')
+        and least(m.origin_x, m.target_x) <= $3 and greatest(m.origin_x, m.target_x) >= $2
+        and least(m.origin_y, m.target_y) <= $5 and greatest(m.origin_y, m.target_y) >= $4`,
+    [kingdomId, x0, x1, y0, y1]);
+
   return {
     bounds: { x0, y0, x1, y1 },
     halls,
-    nodes: [] as never[], camps: [] as never[], holds: [] as never[], banners: [] as never[], marches: [] as never[],
+    nodes,
+    marches: marchRows,
+    camps: [] as never[], holds: [] as never[], banners: [] as never[],
     server_now: new Date().toISOString(),
   };
 }

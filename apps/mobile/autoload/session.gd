@@ -13,6 +13,8 @@ var timers: Array = []           ## pending timers for this hall
 var per_hour: Dictionary = {}    ## grain/timber/stone/iron produced per hour, from the server
 var storage_cap: float = 0.0     ## per resource; production stops here (economy.md rule 3)
 var resources_read_at: float = 0.0  ## unix seconds when the counts above were true
+var marches: Array = []          ## this jarl's marches in the air
+var march_slots: int = 1         ## from the Longhouse (progression.md rule 4)
 
 
 func signed_in() -> bool:
@@ -60,6 +62,8 @@ func refresh_hall() -> String:
 	hall = r.data.get("hall", {})
 	buildings = r.data.get("buildings", [])
 	timers = r.data.get("timers", [])
+	marches = r.data.get("marches", [])
+	march_slots = int(r.data.get("march_slots", 1))
 	var prod: Variant = r.data.get("production", {})
 	if typeof(prod) == TYPE_DICTIONARY:
 		per_hour = (prod as Dictionary).get("per_hour", {})
@@ -90,6 +94,35 @@ func resource_now(res: String) -> float:
 
 func at_storage_cap(res: String) -> bool:
 	return storage_cap > 0.0 and resource_now(res) >= storage_cap
+
+
+## Send gatherers to a node. Returns "" on success, else a message to show.
+func send_gather(node_id: String) -> String:
+	var r: Api.Result = await Api.post_json("/v1/marches/gather", {"node_id": node_id})
+	if not r.ok:
+		return _march_message(r)
+	marches = r.data.get("marches", [])
+	hall_changed.emit()
+	return ""
+
+
+## Turn a march around. Returns "" on success.
+func recall_march(march_id: String) -> String:
+	var r: Api.Result = await Api.post_json("/v1/marches/%s/recall" % march_id, {})
+	if not r.ok:
+		return _march_message(r)
+	marches = r.data.get("marches", [])
+	hall_changed.emit()
+	return ""
+
+
+func _march_message(r: Api.Result) -> String:
+	match r.code:
+		"NO_MARCH_SLOT": return "Every march is already out."
+		"NODE_OCCUPIED": return "Someone is already working that."
+		"NODE_EMPTY": return "There is nothing left there."
+		"NO_NODE": return "That is gone."
+		_: return r.message
 
 
 func building_by_id(id: String) -> Dictionary:

@@ -139,9 +139,15 @@ export async function completeTimer(timerId: string): Promise<"done" | "skipped"
     if (!t || t.state !== "pending") return "skipped";
     const { rows: due } = await c.query<{ ok: boolean }>("select due_at <= now() as ok from timers where id=$1", [timerId]);
     if (!due[0].ok) return "skipped";
+    // Retire this timer BEFORE running the handler, not after. Both happen in one transaction, so
+    // nothing is observable in between and a failure still rolls the pair back together — but the
+    // order matters, because `timers_one_pending_per_ref` forbids two pending timers on the same
+    // ref, and a handler's whole job is often to start the next leg on that same ref (a march goes
+    // march_arrive → gather → march_return; march-tick.md). Marking it done first is what lets a
+    // chain exist at all.
+    await c.query("update timers set state='done', completed_at=now(), version=version+1 where id=$1", [timerId]);
     const h = handlers.get(t.kind);
     if (h) await h(c, t);
-    await c.query("update timers set state='done', completed_at=now(), version=version+1 where id=$1", [timerId]);
     return "done";
   });
 }

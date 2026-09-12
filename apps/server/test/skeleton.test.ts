@@ -23,6 +23,8 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!hasInfra) return;
   await app.close(); await stop();
+  await pool.query("delete from marches where kingdom_id=$1", [kingdomId]);
+  await pool.query("delete from nodes where kingdom_id=$1", [kingdomId]);
   await pool.query("delete from timers where kingdom_id=$1", [kingdomId]);
   await pool.query("delete from buildings where kingdom_id=$1", [kingdomId]);
   await pool.query("delete from occupants where kingdom_id=$1", [kingdomId]);

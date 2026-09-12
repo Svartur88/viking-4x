@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { pool, withTx } from "../db/pool.js";
+import { seedNodesAround } from "../nodes/service.js";
 
 /**
  * Kingdom bootstrap and hall placement (P2.B02).
@@ -80,6 +81,9 @@ export async function signUp(accountId: string, name: string, kingdomId?: string
     await c.query("insert into occupants (kingdom_id, x, y, type, ref_id) values ($1,$2,$3,'hall',$4)", [k.id, site.x, site.y, hallId]);
     for (const [kind, slot, level] of STARTER_BUILDINGS)
       await c.query("insert into buildings (id, kingdom_id, hall_id, kind, slot, level) values ($1,$2,$3,$4,$5,$6)", [randomUUID(), k.id, hallId, kind, slot, level]);
+    // Nodes within sight of the new hall, in the same transaction: a hall must never exist with
+    // nothing on the map worth marching to (P3.M01, map.md rule 6).
+    await seedNodesAround(c, k.id, k.size, k.terrain, site.x, site.y);
     return { playerId, hallId, kingdomId: k.id as string, x: site.x, y: site.y };
   });
 }
