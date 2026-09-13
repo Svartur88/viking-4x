@@ -1,12 +1,12 @@
 # Viking 4X — Godot client
 
-Godot 4.3. The walking skeleton: sign up, see your hall, start an upgrade on a real
+Godot 4.7.2. The walking skeleton: sign up, see your hall, start an upgrade on a real
 server timer, and pan the kingdom map. Grey boxes, on purpose — the art direction
 (OQ-04) is still Hawk's to pick, and the skeleton must not wait for it.
 
 ## Run it on your own machine
 
-1. Install **Godot 4.3** (standard build, not .NET) from godotengine.org. No account, no licence.
+1. Install **Godot 4.7.2** (standard build, not .NET) from godotengine.org. No account, no licence.
 2. Start the server (see `apps/server` and `04-Team/09-Operator/notes/dev-setup.md` in the roadmap).
 3. Open Godot → **Import** → pick this folder's `project.godot` → **Run** (F5).
 4. If your server is not on `http://localhost:3000`, set it on the Settings screen inside the app.
