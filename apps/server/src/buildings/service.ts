@@ -3,6 +3,8 @@ import { withTx } from "../db/pool.js";
 import { insertTimer, scheduleTimer, registerHandler, type TimerRow } from "../timers/engine.js";
 import { settleLocked } from "../economy/service.js";
 import { UPGRADES, BUILDERS } from "../balance.js";
+import { buildingKind } from "../catalogue.js";
+import { randomUUID, createHash } from "node:crypto";
 
 /**
  * Buildings v0 (P2.B04): Longhouse-gated upgrade with a timer. The shape (gate, cost, builder,
@@ -58,3 +60,88 @@ export async function onBuildComplete(c: PoolClient, t: TimerRow) {
   await c.query("update buildings set level = level + 1 where id=$1", [t.ref_id]);
 }
 registerHandler("build", onBuildComplete);
+
+/**
+ * Founding an empty slot (the other half of P2.B04, missing until 2026-09-13).
+ *
+ * `catalogue.ts` and the hall screen were both written to show every slot from the first minute,
+ * built or not, and to let a jarl raise the ones the Longhouse has unlocked. Nothing implemented
+ * the raising, so the client's "Build it" had no endpoint and `Session.plots` had no source — the
+ * hall screen threw and the game opened black.
+ *
+ * A founding is the same shape as an upgrade — gate, cost, builder, timer, handler — and
+ * deliberately reuses it rather than inventing a second one. Its cost is level 1's upgrade cost:
+ * that is not a new number, and DEC-015 defers real balance until the systems exist.
+ *
+ * The timer has no building to point at, because the building does not exist yet, and `ref_id` is a
+ * uuid column — a kind string cannot go in it. So the ref is a uuid DERIVED from (hall, kind). That
+ * keeps `timers_one_pending_per_ref` doing something useful for free: one founding of a given kind
+ * at a time, per hall. The kind itself travels in the payload, which is what the client matches on.
+ */
+function foundingRef(hallId: string, kind: string): string {
+  const h = createHash("sha1").update(`found:${hallId}:${kind}`).digest();
+  const b = Buffer.from(h.subarray(0, 16));
+  b[6] = (b[6] & 0x0f) | 0x50;   // version 5
+  b[8] = (b[8] & 0x3f) | 0x80;   // RFC 4122 variant
+  const x = b.toString("hex");
+  return `${x.slice(0,8)}-${x.slice(8,12)}-${x.slice(12,16)}-${x.slice(16,20)}-${x.slice(20)}`;
+}
+export function foundCost(kind: string) {
+  return upgradeCost(kind, 1);
+}
+export function foundSeconds(kind: string) {
+  return upgradeSeconds(kind, 1);
+}
+
+export async function startFounding(hallId: string, kind: string) {
+  const slot = buildingKind(kind);
+  if (!slot) throw Object.assign(new Error("NO_SUCH_BUILDING"), { statusCode: 404 });
+  if (slot.later) throw Object.assign(new Error("NOT_IN_GAME_YET"), { statusCode: 422 });
+
+  const t = await withTx(async (c) => {
+    // Settle first, for the same reason an upgrade does: grain earned while away is spendable.
+    await c.query("select id from halls where id=$1 for update", [hallId]);
+    const hall = await settleLocked(c, hallId);
+
+    const existing = (await c.query("select id from buildings where hall_id=$1 and kind=$2", [hallId, kind])).rows[0];
+    if (existing) throw Object.assign(new Error("ALREADY_BUILT"), { statusCode: 409 });
+
+    const longhouse = (await c.query("select level from buildings where hall_id=$1 and kind='longhouse'", [hallId])).rows[0].level as number;
+    if (longhouse < slot.unlock) throw Object.assign(new Error("LONGHOUSE_GATE"), { statusCode: 422, details: { needs: slot.unlock, have: longhouse } });
+
+    // Founding competes for the same two builders as upgrading. One queue, not two.
+    const busy = Number((await c.query("select count(*) from timers where hall_id=$1 and kind in ('build','found') and state='pending'", [hallId])).rows[0].count);
+    if (busy >= BUILDERS) throw Object.assign(new Error("NO_BUILDER"), { statusCode: 409 });
+
+    const cost = foundCost(kind);
+    if (hall.grain < cost.grain || hall.timber < cost.timber || hall.stone < cost.stone || hall.iron < cost.iron)
+      throw Object.assign(new Error("INSUFFICIENT"), { statusCode: 422, details: cost });
+    await c.query("update halls set grain=grain-$2, timber=timber-$3, stone=stone-$4, iron=iron-$5 where id=$1",
+      [hallId, cost.grain, cost.timber, cost.stone, cost.iron]);
+
+    return insertTimer(c, {
+      kingdomId: hall.kingdom_id, hallId, kind: "found",
+      refType: "building_kind", refId: foundingRef(hallId, kind),
+      baseSeconds: foundSeconds(kind), payload: { kind },
+    });
+  });
+  return scheduleTimer(t);
+}
+
+/** Completion handler: the building appears, at level 1, inside the timer's transaction. */
+export async function onFoundComplete(c: PoolClient, t: TimerRow) {
+  if (!t.hall_id) return;
+  await c.query("select id from halls where id=$1 for update", [t.hall_id]);
+  // Settle at the OLD rate before the new building starts producing, exactly as an upgrade does.
+  await settleLocked(c, t.hall_id);
+  const kingdom = (await c.query("select kingdom_id from halls where id=$1", [t.hall_id])).rows[0].kingdom_id;
+  // The kind lives in the payload, not the ref — see foundingRef above.
+  const kind = String((t.payload as { kind?: string })?.kind ?? "");
+  if (!kind) return;
+  // Idempotent: a retried completion must not raise a second building of the same kind.
+  await c.query(
+    "insert into buildings (id, kingdom_id, hall_id, kind, slot, level) values ($1,$2,$3,$4,0,1) on conflict (hall_id, kind, slot) do nothing",
+    [randomUUID(), kingdom, t.hall_id, kind],
+  );
+}
+registerHandler("found", onFoundComplete);

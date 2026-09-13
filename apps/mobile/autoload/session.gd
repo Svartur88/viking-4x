@@ -9,6 +9,7 @@ const BUILDERS := 2  ## PR-01: two free builders, never a paid third
 var player: Dictionary = {}      ## id, name, x, y, kingdomId
 var hall: Dictionary = {}        ## row from halls: id, x, y, grain, timber, stone, iron
 var buildings: Array = []        ## [{id, kind, slot, level}]
+var plots: Array = []            ## every slot in the hall, built or not, straight from the server
 var timers: Array = []           ## pending timers for this hall
 var per_hour: Dictionary = {}    ## grain/timber/stone/iron produced per hour, from the server
 var storage_cap: float = 0.0     ## per resource; production stops here (economy.md rule 3)
@@ -33,6 +34,7 @@ func clear() -> void:
 	player = {}
 	hall = {}
 	buildings = []
+	plots = []
 	timers = []
 	marches = []
 	march_slots = 1
@@ -77,6 +79,7 @@ func refresh_hall() -> String:
 		return r.message
 	hall = r.data.get("hall", {})
 	buildings = r.data.get("buildings", [])
+	plots = r.data.get("plots", [])
 	timers = r.data.get("timers", [])
 	marches = r.data.get("marches", [])
 	march_slots = int(r.data.get("march_slots", 1))
@@ -236,3 +239,35 @@ func _upgrade_message(r: Api.Result) -> String:
 			return "This is as high as it goes."
 		_:
 			return r.message
+
+
+## The timer for a building being raised from an empty slot. Matched on the payload's kind, not on
+## ref_id: the building does not exist until the timer completes, so there is no id to point at.
+func founding_timer_for(kind: String) -> Dictionary:
+	for t in timers:
+		if str(t.get("kind", "")) != "found":
+			continue
+		var payload: Dictionary = t.get("payload", {})
+		if str(payload.get("kind", "")) == kind:
+			return t
+	return {}
+
+
+## Raise a building on its empty slot. Returns "" on success, a message otherwise.
+func found(kind: String) -> String:
+	var r: Api.Result = await Api.post_json("/v1/buildings/found", {"kind": kind})
+	if not r.ok:
+		return _found_message(r)
+	await refresh_hall()
+	hall_changed.emit()
+	return ""
+
+
+func _found_message(r: Api.Result) -> String:
+	match r.message:
+		"ALREADY_BUILT": return "It already stands."
+		"LONGHOUSE_GATE": return "The Longhouse is not high enough yet."
+		"NO_BUILDER": return "Both builders are busy."
+		"INSUFFICIENT": return "Not enough to pay for it."
+		"NOT_IN_GAME_YET": return "Not in the game yet."
+		_: return r.message

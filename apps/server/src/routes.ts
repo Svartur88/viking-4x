@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { authRoutes, requireAuth } from "./auth/routes.js";
 import { signUp } from "./kingdom/service.js";
-import { startUpgrade, upgradeCost, upgradeSeconds } from "./buildings/service.js";
+import { startUpgrade, upgradeCost, upgradeSeconds, startFounding, foundCost } from "./buildings/service.js";
+import { plotsFor } from "./catalogue.js";
 import { pool } from "./db/pool.js";
 import { signAccess } from "./auth/jwt.js";
 import { terrainChunk, viewport, overviewPng, overviewMarkers } from "./map/service.js";
@@ -30,7 +31,7 @@ export async function registerRoutes(app: FastifyInstance) {
     const rows = (await pool.query("select id, kind, slot, level from buildings where hall_id=$1 order by kind, slot", [hall.id])).rows;
     // Price the next level here rather than letting the client mirror the formula: two copies of a
     // cost curve drift the moment balance-v1.csv lands, and the client's copy would be the wrong one.
-    const buildings = rows.map((b: { kind: string; level: number }) => ({
+    const buildings = rows.map((b: { id: string; kind: string; level: number }) => ({
       ...b,
       next_cost: b.level >= 20 ? null : upgradeCost(b.kind, b.level + 1),
       next_seconds: b.level >= 20 ? null : upgradeSeconds(b.kind, b.level + 1),
@@ -42,6 +43,9 @@ export async function registerRoutes(app: FastifyInstance) {
     const barracks = Number(buildings.find((b: { kind: string }) => b.kind === "barracks")?.level ?? 0);
     return {
       hall, buildings, timers,
+      // Every slot in the hall, built or not, priced here so the client never mirrors a cost curve.
+      // This is what the hall screen draws; without it the screen has nothing to place (2026-09-13).
+      plots: plotsFor(buildings, longhouse, foundCost),
       production: { per_hour: perHour, cap },
       marches: await activeMarches(claims.playerId!),
       march_slots: marchSlots(longhouse),
@@ -54,6 +58,17 @@ export async function registerRoutes(app: FastifyInstance) {
       trains: TRAINS,
       server_now: new Date().toISOString(),
     };
+  });
+
+  // Raise a building that does not exist yet, on its fixed slot in the catalogue.
+  app.post<{ Body: { kind?: string } }>("/v1/buildings/found", async (req) => {
+    const claims = await requireAuth(req);
+    const hall = (await pool.query("select id from halls where player_id=$1", [claims.playerId])).rows[0];
+    if (!hall) throw Object.assign(new Error("NO_HALL"), { statusCode: 404 });
+    const kind = String(req.body?.kind ?? "");
+    if (!kind) throw Object.assign(new Error("NO_KIND"), { statusCode: 422 });
+    const timer = await startFounding(hall.id, kind);
+    return { timer, server_now: new Date().toISOString() };
   });
 
   app.post<{ Params: { id: string } }>("/v1/buildings/:id/upgrade", async (req) => {
