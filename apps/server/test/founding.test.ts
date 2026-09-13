@@ -73,7 +73,12 @@ d("founding a building", () => {
 
     // The client crashed because this key was absent. Assert it exists before anything else.
     expect(Array.isArray(hall.plots)).toBe(true);
-    expect(hall.plots.length).toBe(27);
+    // 39 plots across 27 kinds: the four production kinds have four each (buildings.md rule 1).
+    expect(hall.plots.length).toBe(39);
+    const farms = hall.plots.filter((q: { kind: string }) => q.kind === "farm");
+    expect(farms.length).toBe(4);
+    expect(farms.filter((q: { built: boolean }) => q.built).length).toBe(1);   // one starter farm
+    expect(new Set(hall.plots.map((q: { slot_id: string }) => q.slot_id)).size).toBe(39);
 
     // Every field city_screen.gd reads off a plot.
     for (const plot of hall.plots) {
@@ -85,6 +90,8 @@ d("founding a building", () => {
       expect(typeof plot.size).toBe("number");
       expect(typeof plot.built).toBe("boolean");
       expect(typeof plot.can_found).toBe("boolean");
+      expect(typeof plot.slot).toBe("number");
+      expect(typeof plot.slot_id).toBe("string");
       expect(typeof plot.later).toBe("boolean");
     }
 
@@ -154,5 +161,41 @@ d("founding a building", () => {
     expect(store.built).toBe(true);
     expect(store.level).toBe(1);
     expect(after.buildings.some((b: { kind: string }) => b.kind === "storehouse")).toBe(true);
+  });
+
+  it("a second farm is a different PLOT of the same kind, not a duplicate", async () => {
+    const jwt = await guest();
+    const p = (await app.inject({ method: "POST", url: "/v1/players", headers: { authorization: `Bearer ${jwt}` }, payload: { name: `S${Date.now() % 10000}` } })).json();
+    const auth = { authorization: `Bearer ${p.jwt}` };
+    const hall0 = (await app.inject({ method: "GET", url: "/v1/hall", headers: auth })).json();
+    await pool.query("update halls set grain=1e9, timber=1e9, stone=1e9, iron=1e9 where id=$1", [hall0.hall.id]);
+
+    // Slot 0 stands from the first minute; slot 1 needs a higher Longhouse.
+    let r = await app.inject({ method: "POST", url: "/v1/buildings/found", headers: auth, payload: { kind: "farm", slot: 0 } });
+    expect(r.statusCode).toBe(409); expect(r.json().error.code).toBe("ALREADY_BUILT");
+    r = await app.inject({ method: "POST", url: "/v1/buildings/found", headers: auth, payload: { kind: "farm", slot: 1 } });
+    expect(r.statusCode).toBe(422); expect(r.json().error.code).toBe("LONGHOUSE_GATE");
+
+    // Raise the Longhouse until farm slot 1 unlocks, then found it.
+    const lh = hall0.buildings.find((b: { kind: string }) => b.kind === "longhouse");
+    const needs = hall0.plots.find((q: { slot_id: string }) => q.slot_id === "farm:1").unlock;
+    for (let lvl = 1; lvl < needs; lvl++) {
+      const up = (await app.inject({ method: "POST", url: `/v1/buildings/${lh.id}/upgrade`, headers: auth })).json();
+      await reduceTimer(up.timer.id, 10_000, { kind: "speedup_test" });
+      await completeTimer(up.timer.id);
+    }
+    const f = (await app.inject({ method: "POST", url: "/v1/buildings/found", headers: auth, payload: { kind: "farm", slot: 1 } })).json();
+    expect(f.timer.payload.kind).toBe("farm");
+    expect(f.timer.payload.slot).toBe(1);
+    await reduceTimer(f.timer.id, 10_000, { kind: "speedup_test" });
+    await completeTimer(f.timer.id);
+
+    const after = (await app.inject({ method: "GET", url: "/v1/hall", headers: auth })).json();
+    const farms = after.buildings.filter((b: { kind: string }) => b.kind === "farm");
+    expect(farms.length).toBe(2);
+    expect(farms.map((b: { slot: number }) => b.slot).sort()).toEqual([0, 1]);
+    // And the two are distinct plots on the plate, not the same spot twice.
+    const at = after.plots.filter((q: { kind: string }) => q.kind === "farm").map((q: { at: { x: number } }) => q.at.x);
+    expect(new Set(at).size).toBe(4);
   });
 });

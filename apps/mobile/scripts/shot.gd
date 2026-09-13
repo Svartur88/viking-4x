@@ -85,5 +85,13 @@ func _settle(seconds: float = 1.0) -> void:
 func _save(what: String) -> void:
 	var image := get_viewport().get_texture().get_image()
 	var path := "%s/%s.png" % [_dir, what]
-	image.save_png(path)
+	# Make the directory and CHECK the result. This printed "wrote" for a directory that did not
+	# exist and saved nothing — a review that silently reviews last run's screenshots is worse than
+	# no review at all.
+	DirAccess.make_dir_recursive_absolute(_dir)
+	var err := image.save_png(path)
+	if err != OK:
+		push_error("shot: could NOT write %s (error %d)" % [path, err])
+		print("shot: FAILED to write ", path, " (error ", err, ")")
+		return
 	print("shot: wrote ", path)

@@ -241,21 +241,22 @@ func _upgrade_message(r: Api.Result) -> String:
 			return r.message
 
 
-## The timer for a building being raised from an empty slot. Matched on the payload's kind, not on
-## ref_id: the building does not exist until the timer completes, so there is no id to point at.
-func founding_timer_for(kind: String) -> Dictionary:
+## The timer for a building being raised from an empty plot. Matched on the payload's kind AND slot,
+## not on ref_id: the building does not exist until the timer completes, so there is no id to point
+## at — and four farms are four plots of one kind, so kind alone would match the wrong one.
+func founding_timer_for(kind: String, slot: int = 0) -> Dictionary:
 	for t in timers:
 		if str(t.get("kind", "")) != "found":
 			continue
 		var payload: Dictionary = t.get("payload", {})
-		if str(payload.get("kind", "")) == kind:
+		if str(payload.get("kind", "")) == kind and int(payload.get("slot", 0)) == slot:
 			return t
 	return {}
 
 
-## Raise a building on its empty slot. Returns "" on success, a message otherwise.
-func found(kind: String) -> String:
-	var r: Api.Result = await Api.post_json("/v1/buildings/found", {"kind": kind})
+## Raise a building on one empty plot. Returns "" on success, a message otherwise.
+func found(kind: String, slot: int = 0) -> String:
+	var r: Api.Result = await Api.post_json("/v1/buildings/found", {"kind": kind, "slot": slot})
 	if not r.ok:
 		return _found_message(r)
 	await refresh_hall()

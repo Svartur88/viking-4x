@@ -31,7 +31,7 @@ export async function registerRoutes(app: FastifyInstance) {
     const rows = (await pool.query("select id, kind, slot, level from buildings where hall_id=$1 order by kind, slot", [hall.id])).rows;
     // Price the next level here rather than letting the client mirror the formula: two copies of a
     // cost curve drift the moment balance-v1.csv lands, and the client's copy would be the wrong one.
-    const buildings = rows.map((b: { id: string; kind: string; level: number }) => ({
+    const buildings = rows.map((b: { id: string; kind: string; slot: number; level: number }) => ({
       ...b,
       next_cost: b.level >= 20 ? null : upgradeCost(b.kind, b.level + 1),
       next_seconds: b.level >= 20 ? null : upgradeSeconds(b.kind, b.level + 1),
@@ -61,13 +61,13 @@ export async function registerRoutes(app: FastifyInstance) {
   });
 
   // Raise a building that does not exist yet, on its fixed slot in the catalogue.
-  app.post<{ Body: { kind?: string } }>("/v1/buildings/found", async (req) => {
+  app.post<{ Body: { kind?: string; slot?: number } }>("/v1/buildings/found", async (req) => {
     const claims = await requireAuth(req);
     const hall = (await pool.query("select id from halls where player_id=$1", [claims.playerId])).rows[0];
     if (!hall) throw Object.assign(new Error("NO_HALL"), { statusCode: 404 });
     const kind = String(req.body?.kind ?? "");
     if (!kind) throw Object.assign(new Error("NO_KIND"), { statusCode: 422 });
-    const timer = await startFounding(hall.id, kind);
+    const timer = await startFounding(hall.id, kind, Number(req.body?.slot ?? 0));
     return { timer, server_now: new Date().toISOString() };
   });
 

@@ -73,7 +73,9 @@ var _zoom := 1.0
 var _hits: Array = []         ## tappable areas in ground coordinates, near to far
 var _sheet: PanelContainer
 var _sheet_building_id := ""
-var _sheet_empty_kind := ""
+## Which EMPTY plot the sheet is showing, as "kind:slot". Not the kind alone: four farms are four
+## plots of one kind, and keying on kind opened the wrong sheet and founded the wrong ground.
+var _sheet_empty_id := ""
 var _plots: Dictionary = {}   ## building_id -> {node, timer_label}
 
 
@@ -201,9 +203,9 @@ func _rebuild() -> void:
 	# for a batch that had already started.
 	if _sheet.visible and _sheet_building_id != "":
 		_refresh_sheet(true)
-	elif _sheet.visible and _sheet_empty_kind != "":
+	elif _sheet.visible and _sheet_empty_id != "":
 		for p: Dictionary in Session.plots:
-			if str(p.get("kind", "")) == _sheet_empty_kind:
+			if str(p.get("slot_id", "")) == _sheet_empty_id:
 				_rebuild_empty_sheet(p)
 
 	for child in _ground.get_children():
@@ -307,7 +309,7 @@ func _place_plot(plot: Dictionary) -> void:
 	holder.add_child(plate)
 
 	if not built:
-		var founding: Dictionary = Session.founding_timer_for(kind)
+		var founding: Dictionary = Session.founding_timer_for(kind, int(plot.get("slot", 0)))
 		var note := ""
 		if not founding.is_empty():
 			note = "building  " + _countdown(Api.seconds_until(str(founding.get("due_at", ""))))
@@ -337,6 +339,7 @@ func _place_plot(plot: Dictionary) -> void:
 	# _on_view_input instead, the same way the world map does it.
 	_hits.append({
 		"kind": kind,
+		"slot_id": str(plot.get("slot_id", kind)),
 		"id": str(plot.get("id", "")),
 		"built": built,
 		"rect": Rect2(centre - Vector2(width * 0.5, art_height), Vector2(width, art_height + 26)),
@@ -347,15 +350,15 @@ func _place_plot(plot: Dictionary) -> void:
 
 ## Tapping bare ground. Says what will stand here, what it is for, and either offers to start it or
 ## says plainly what is in the way.
-func _open_empty_sheet(kind: String) -> void:
+func _open_empty_sheet(slot_id: String) -> void:
 	var plot: Dictionary = {}
 	for p: Dictionary in Session.plots:
-		if str(p.get("kind", "")) == kind:
+		if str(p.get("slot_id", "")) == slot_id:
 			plot = p
 	if plot.is_empty():
 		return
 	_sheet_building_id = ""
-	_sheet_empty_kind = kind
+	_sheet_empty_id = slot_id
 	_sheet.visible = true
 	_rebuild_empty_sheet(plot)
 
@@ -369,10 +372,11 @@ func _rebuild_empty_sheet(plot: Dictionary) -> void:
 	_sheet.add_child(box)
 
 	var kind := str(plot.get("kind", ""))
+	var slot := int(plot.get("slot", 0))
 	box.add_child(Tokens.label(str(plot.get("name", kind)), 34))
 	box.add_child(Tokens.label(str(plot.get("purpose", "")), 24, Tokens.TIMBER_LIGHT))
 
-	var founding: Dictionary = Session.founding_timer_for(kind)
+	var founding: Dictionary = Session.founding_timer_for(kind, slot)
 	if not founding.is_empty():
 		var left := _countdown(Api.seconds_until(str(founding.get("due_at", ""))))
 		box.add_child(Tokens.label("Being built  ·  ready in " + left, 26, Tokens.FIRE))
@@ -390,20 +394,20 @@ func _rebuild_empty_sheet(plot: Dictionary) -> void:
 		var start := Tokens.button("Build it")
 		start.pressed.connect(func() -> void:
 			start.disabled = true
-			var err: String = await Session.found(kind)
+			var err: String = await Session.found(kind, slot)
 			notify.emit(err if err != "" else "The builders have begun."))
 		box.add_child(start)
 
 	var close := Tokens.button("Close", false)
 	close.pressed.connect(func() -> void:
 		_sheet.visible = false
-		_sheet_empty_kind = "")
+		_sheet_empty_id = "")
 	box.add_child(close)
 	_fit_sheet()
 
 
 func _open_sheet(building_id: String) -> void:
-	_sheet_empty_kind = ""
+	_sheet_empty_id = ""
 	_sheet_building_id = building_id
 	_sheet.visible = true
 	_refresh_sheet(true)
@@ -747,8 +751,8 @@ func _tap_hall(at_view: Vector2) -> void:
 			if bool(hit["built"]):
 				_open_sheet(str(hit["id"]))
 			else:
-				_open_empty_sheet(str(hit["kind"]))
+				_open_empty_sheet(str(hit["slot_id"]))
 			return
 	_sheet.visible = false
-	_sheet_empty_kind = ""
+	_sheet_empty_id = ""
 	_sheet_building_id = ""

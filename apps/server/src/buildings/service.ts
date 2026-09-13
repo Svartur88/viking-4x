@@ -74,12 +74,13 @@ registerHandler("build", onBuildComplete);
  * that is not a new number, and DEC-015 defers real balance until the systems exist.
  *
  * The timer has no building to point at, because the building does not exist yet, and `ref_id` is a
- * uuid column — a kind string cannot go in it. So the ref is a uuid DERIVED from (hall, kind). That
- * keeps `timers_one_pending_per_ref` doing something useful for free: one founding of a given kind
- * at a time, per hall. The kind itself travels in the payload, which is what the client matches on.
+ * uuid column — a kind string cannot go in it. So the ref is a uuid DERIVED from (hall, kind, slot).
+ * That keeps `timers_one_pending_per_ref` doing something useful for free: one founding of a given
+ * PLOT at a time, per hall — which matters now that four farms are four plots of one kind. The kind
+ * and slot travel in the payload, which is what the client matches on.
  */
-function foundingRef(hallId: string, kind: string): string {
-  const h = createHash("sha1").update(`found:${hallId}:${kind}`).digest();
+function foundingRef(hallId: string, kind: string, slot: number): string {
+  const h = createHash("sha1").update(`found:${hallId}:${kind}:${slot}`).digest();
   const b = Buffer.from(h.subarray(0, 16));
   b[6] = (b[6] & 0x0f) | 0x50;   // version 5
   b[8] = (b[8] & 0x3f) | 0x80;   // RFC 4122 variant
@@ -93,21 +94,22 @@ export function foundSeconds(kind: string) {
   return upgradeSeconds(kind, 1);
 }
 
-export async function startFounding(hallId: string, kind: string) {
-  const slot = buildingKind(kind);
-  if (!slot) throw Object.assign(new Error("NO_SUCH_BUILDING"), { statusCode: 404 });
-  if (slot.later) throw Object.assign(new Error("NOT_IN_GAME_YET"), { statusCode: 422 });
+export async function startFounding(hallId: string, kind: string, slot = 0) {
+  const plot = buildingKind(kind, slot);
+  if (!plot) throw Object.assign(new Error("NO_SUCH_BUILDING"), { statusCode: 404 });
+  if (plot.later) throw Object.assign(new Error("NOT_IN_GAME_YET"), { statusCode: 422 });
 
   const t = await withTx(async (c) => {
     // Settle first, for the same reason an upgrade does: grain earned while away is spendable.
     await c.query("select id from halls where id=$1 for update", [hallId]);
     const hall = await settleLocked(c, hallId);
 
-    const existing = (await c.query("select id from buildings where hall_id=$1 and kind=$2", [hallId, kind])).rows[0];
+    // Per PLOT, not per kind: a second farm is a legitimate build, a second farm on slot 1 is not.
+    const existing = (await c.query("select id from buildings where hall_id=$1 and kind=$2 and slot=$3", [hallId, kind, slot])).rows[0];
     if (existing) throw Object.assign(new Error("ALREADY_BUILT"), { statusCode: 409 });
 
     const longhouse = (await c.query("select level from buildings where hall_id=$1 and kind='longhouse'", [hallId])).rows[0].level as number;
-    if (longhouse < slot.unlock) throw Object.assign(new Error("LONGHOUSE_GATE"), { statusCode: 422, details: { needs: slot.unlock, have: longhouse } });
+    if (longhouse < plot.unlock) throw Object.assign(new Error("LONGHOUSE_GATE"), { statusCode: 422, details: { needs: plot.unlock, have: longhouse } });
 
     // Founding competes for the same two builders as upgrading. One queue, not two.
     const busy = Number((await c.query("select count(*) from timers where hall_id=$1 and kind in ('build','found') and state='pending'", [hallId])).rows[0].count);
@@ -121,8 +123,8 @@ export async function startFounding(hallId: string, kind: string) {
 
     return insertTimer(c, {
       kingdomId: hall.kingdom_id, hallId, kind: "found",
-      refType: "building_kind", refId: foundingRef(hallId, kind),
-      baseSeconds: foundSeconds(kind), payload: { kind },
+      refType: "building_kind", refId: foundingRef(hallId, kind, slot),
+      baseSeconds: foundSeconds(kind), payload: { kind, slot },
     });
   });
   return scheduleTimer(t);
@@ -136,12 +138,14 @@ export async function onFoundComplete(c: PoolClient, t: TimerRow) {
   await settleLocked(c, t.hall_id);
   const kingdom = (await c.query("select kingdom_id from halls where id=$1", [t.hall_id])).rows[0].kingdom_id;
   // The kind lives in the payload, not the ref — see foundingRef above.
-  const kind = String((t.payload as { kind?: string })?.kind ?? "");
+  const p = t.payload as { kind?: string; slot?: number };
+  const kind = String(p?.kind ?? "");
+  const slot = Number(p?.slot ?? 0);
   if (!kind) return;
   // Idempotent: a retried completion must not raise a second building of the same kind.
   await c.query(
-    "insert into buildings (id, kingdom_id, hall_id, kind, slot, level) values ($1,$2,$3,$4,0,1) on conflict (hall_id, kind, slot) do nothing",
-    [randomUUID(), kingdom, t.hall_id, kind],
+    "insert into buildings (id, kingdom_id, hall_id, kind, slot, level) values ($1,$2,$3,$4,$5,1) on conflict (hall_id, kind, slot) do nothing",
+    [randomUUID(), kingdom, t.hall_id, kind, slot],
   );
 }
 registerHandler("found", onFoundComplete);
