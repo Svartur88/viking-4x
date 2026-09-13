@@ -32,13 +32,22 @@ const HALL_GROUND := "res://art/hall/hall-ground.webp"
 ## the plate's own shape rather than being chosen separately.
 const HALL_VISIBLE := 0.62
 
-## Zoom (2026-09-13). 1.0 is "the whole world fits the way HALL_VISIBLE says", and it is the floor
-## on purpose: zooming out past it would show the edge of the painted plate and the black beyond it.
+## Zoom (2026-09-13). 1.0 is the framing the hall opens at: HALL_VISIBLE of the plate's height
+## filling the window, with somewhere to drag in every direction.
+##
+## Out from there goes to `_min_zoom()`, which is whatever it takes to fit the WHOLE plate inside
+## the window at once — shore, yard, forest and scree in one look. Below 1.0 the ground stops
+## filling the window, so the hall sits on a plain field rather than on black, and is centred in
+## whichever direction it no longer fills. The first version stopped at 1.0 and there was nowhere
+## to go: the useful view — the whole homestead at once — was the one you could not reach.
+##
 ## The ceiling is where a Longhouse fills about half the window — far enough in to look at a
 ## building, not so far that the plate's own resolution starts to show.
-const MIN_ZOOM := 1.0
 const MAX_ZOOM := 3.0
 const ZOOM_STEP := 1.15
+
+## Behind the ground when it no longer fills the window. Not black: black reads as a broken screen.
+const BACKDROP := Tokens.IRON
 
 const RESOURCE_NAMES := {"grain": "Grain", "timber": "Timber", "stone": "Stone", "iron": "Iron"}
 
@@ -91,6 +100,7 @@ func _ready() -> void:
 	_view.clip_contents = true
 	_view.gui_input.connect(_on_view_input)
 	_view.resized.connect(_on_view_resized)
+	_view.draw.connect(_draw_backdrop)
 	column.add_child(_view)
 
 	# The plate may not be imported yet on a fresh clone; the ground copes with that rather than
@@ -126,6 +136,11 @@ func _ready() -> void:
 ## The painted plate, stretched over the whole ground and nothing else drawn on top of it. The flat
 ## coloured bands that used to live here were a stand-in; the plate replaces them outright, and the
 ## catalogue's coordinates are read off this exact image.
+## What lies behind the land once you have zoomed out past it filling the window.
+func _draw_backdrop() -> void:
+	_view.draw_rect(Rect2(Vector2.ZERO, _view.size), BACKDROP)
+
+
 func _draw_ground() -> void:
 	if _ground.size.x <= 0.0 or _ground.size.y <= 0.0:
 		return
@@ -618,10 +633,20 @@ func _fit_size() -> Vector2:
 	return Vector2(ground_h * aspect, ground_h)
 
 
+## How far out the wheel may go: the zoom at which the whole plate fits inside the window. Always
+## at most 1.0, and it changes with the window, so it is computed rather than stored.
+func _min_zoom() -> float:
+	var fit := _fit_size()
+	if fit.y <= 0.0 or fit.x <= 0.0:
+		return 1.0
+	var contain: float = minf(_view.size.y / fit.y, _view.size.x / fit.x)
+	return minf(contain, 1.0)
+
+
 ## Zoom about a point in the window, so whatever is under the cursor stays under the cursor. Zooming
 ## about the centre instead makes the thing you are looking at slide away as you lean in.
 func _zoom_to(target: float, focus: Vector2) -> void:
-	var want: float = clampf(target, MIN_ZOOM, MAX_ZOOM)
+	var want: float = clampf(target, _min_zoom(), MAX_ZOOM)
 	if is_equal_approx(want, _zoom):
 		return
 	var old: Vector2 = _ground.size
@@ -646,6 +671,7 @@ func _on_view_resized() -> void:
 	var aspect := 0.75
 	if _plate != null and _plate.get_height() > 0:
 		aspect = float(_plate.get_width()) / float(_plate.get_height())
+	_zoom = clampf(_zoom, _min_zoom(), MAX_ZOOM)
 	_ground.size = _fit_size() * _zoom
 	_clamp_camera()
 	if not _centred_once:
@@ -665,11 +691,21 @@ func _centre_on_longhouse() -> void:
 			return
 
 
+## Keep the window on the land. Once the ground is SMALLER than the window in an axis — which zoom
+## out now allows — there is nothing to pan there, so it is centred instead of being pinned to the
+## top-left corner, which would hang the hall off one edge with all the empty space on the other.
 func _clamp_camera() -> void:
 	var span := _ground.size - _view.size
-	_camera.x = clampf(_camera.x, 0.0, maxf(0.0, span.x))
-	_camera.y = clampf(_camera.y, 0.0, maxf(0.0, span.y))
+	if span.x >= 0.0:
+		_camera.x = clampf(_camera.x, 0.0, span.x)
+	else:
+		_camera.x = span.x * 0.5
+	if span.y >= 0.0:
+		_camera.y = clampf(_camera.y, 0.0, span.y)
+	else:
+		_camera.y = span.y * 0.5
 	_ground.position = -_camera
+	_view.queue_redraw()
 
 
 ## Press, hold and move to look around the hall. A press that barely moves is a tap and is left to

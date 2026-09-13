@@ -38,8 +38,9 @@ func run(root: Control) -> void:
 			_wheel(where, MOUSE_BUTTON_WHEEL_UP)
 		await _settle(1.0)
 		_save("city-near")
-		# And back out again: zoom must be reversible, and the floor must hold.
-		for i in 12:
+		# And all the way back out. Far enough notches to hit the floor, so this proves both that
+		# zoom is reversible AND that the floor is the whole plate rather than the opening framing.
+		for i in 24:
 			_wheel(where, MOUSE_BUTTON_WHEEL_DOWN)
 		await _settle(1.0)
 		_save("city-far")
