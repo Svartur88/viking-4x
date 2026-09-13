@@ -26,6 +26,24 @@ func run(root: Control) -> void:
 	await _settle()
 	_save("city")
 
+	# Zoom the hall by pushing REAL wheel events rather than calling the handler, because a check
+	# that calls the handler proves only that the handler works. Note Input.parse_input_event does
+	# nothing headless and reports no error; get_viewport().push_input is the one that works.
+	var hall: Control = root.current_screen()
+	if hall != null:
+		# In WINDOW pixels, not control pixels: with a content scale factor the two differ, and an
+		# event pushed in control coordinates lands outside the window and is silently dropped.
+		var where := Vector2(DisplayServer.window_get_size()) * 0.5
+		for i in 6:
+			_wheel(where, MOUSE_BUTTON_WHEEL_UP)
+		await _settle(1.0)
+		_save("city-near")
+		# And back out again: zoom must be reversible, and the floor must hold.
+		for i in 12:
+			_wheel(where, MOUSE_BUTTON_WHEEL_DOWN)
+		await _settle(1.0)
+		_save("city-far")
+
 	root.go("map")
 	await _settle(2.5)
 	_save("map")
@@ -45,6 +63,17 @@ func run(root: Control) -> void:
 		_save("kingdom")
 
 	get_tree().quit(0)
+
+
+## One wheel notch at a point, as the engine delivers it: press then release.
+func _wheel(at: Vector2, button: int) -> void:
+	for pressed in [true, false]:
+		var ev := InputEventMouseButton.new()
+		ev.button_index = button
+		ev.pressed = pressed
+		ev.position = at
+		ev.global_position = at
+		get_viewport().push_input(ev)
 
 
 func _settle(seconds: float = 1.0) -> void:

@@ -32,6 +32,14 @@ const HALL_GROUND := "res://art/hall/hall-ground.webp"
 ## the plate's own shape rather than being chosen separately.
 const HALL_VISIBLE := 0.62
 
+## Zoom (2026-09-13). 1.0 is "the whole world fits the way HALL_VISIBLE says", and it is the floor
+## on purpose: zooming out past it would show the edge of the painted plate and the black beyond it.
+## The ceiling is where a Longhouse fills about half the window — far enough in to look at a
+## building, not so far that the plate's own resolution starts to show.
+const MIN_ZOOM := 1.0
+const MAX_ZOOM := 3.0
+const ZOOM_STEP := 1.15
+
 const RESOURCE_NAMES := {"grain": "Grain", "timber": "Timber", "stone": "Stone", "iron": "Iron"}
 
 ## Display names only. WHICH building trains WHOM comes from the server (Session.trains) — this
@@ -52,6 +60,7 @@ var _camera := Vector2.ZERO   ## top-left of the window, in ground pixels
 var _dragging := false
 var _drag_moved := 0.0
 var _centred_once := false
+var _zoom := 1.0
 var _hits: Array = []         ## tappable areas in ground coordinates, near to far
 var _sheet: PanelContainer
 var _sheet_building_id := ""
@@ -599,6 +608,35 @@ func _train_cost_text(kind: String, count: int) -> String:
 	return "%d costs " % count + "   ".join(parts)
 
 
+## The ground at zoom 1: the plate's own shape, tall enough that HALL_VISIBLE of it fills the
+## window, and widened if a wide window would otherwise see past the edge of the world.
+func _fit_size() -> Vector2:
+	var aspect := 0.75
+	if _plate != null and _plate.get_height() > 0:
+		aspect = float(_plate.get_width()) / float(_plate.get_height())
+	var ground_h: float = maxf(_view.size.y / HALL_VISIBLE, _view.size.x / aspect)
+	return Vector2(ground_h * aspect, ground_h)
+
+
+## Zoom about a point in the window, so whatever is under the cursor stays under the cursor. Zooming
+## about the centre instead makes the thing you are looking at slide away as you lean in.
+func _zoom_to(target: float, focus: Vector2) -> void:
+	var want: float = clampf(target, MIN_ZOOM, MAX_ZOOM)
+	if is_equal_approx(want, _zoom):
+		return
+	var old: Vector2 = _ground.size
+	if old.x <= 0.0:
+		return
+	# Where the focus sits on the ground, as a fraction — the one thing that must not move.
+	var anchor := (focus + _camera) / old
+	_zoom = want
+	_ground.size = _fit_size() * _zoom
+	_camera = anchor * _ground.size - focus
+	_clamp_camera()
+	_rebuild()
+	_ground.queue_redraw()
+
+
 func _on_view_resized() -> void:
 	if _view.size.x <= 0.0:
 		return
@@ -608,8 +646,7 @@ func _on_view_resized() -> void:
 	var aspect := 0.75
 	if _plate != null and _plate.get_height() > 0:
 		aspect = float(_plate.get_width()) / float(_plate.get_height())
-	var ground_h: float = maxf(_view.size.y / HALL_VISIBLE, _view.size.x / aspect)
-	_ground.size = Vector2(ground_h * aspect, ground_h)
+	_ground.size = _fit_size() * _zoom
 	_clamp_camera()
 	if not _centred_once:
 		_centre_on_longhouse()
@@ -640,12 +677,21 @@ func _clamp_camera() -> void:
 func _on_view_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_LEFT:
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
+			_zoom_to(_zoom * ZOOM_STEP, mb.position)
+		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
+			_zoom_to(_zoom / ZOOM_STEP, mb.position)
+		elif mb.button_index == MOUSE_BUTTON_LEFT:
 			_dragging = mb.pressed
 			if mb.pressed:
 				_drag_moved = 0.0
 			elif _drag_moved < 8.0:
 				_tap_hall(mb.position)
+	elif event is InputEventMagnifyGesture:
+		# Trackpad pinch on desktop. Touch pinch on a phone is two-finger tracking and is its own
+		# unit; nothing here assumes a mouse, so it drops in at the same place.
+		var mg := event as InputEventMagnifyGesture
+		_zoom_to(_zoom * mg.factor, mg.position)
 	elif event is InputEventMouseMotion and _dragging:
 		var mm := event as InputEventMouseMotion
 		_drag_moved += mm.relative.length()
