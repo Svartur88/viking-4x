@@ -6,6 +6,7 @@ import { startWorker, reconcile } from "./timers/engine.js";
 import "./buildings/service.js"; // registers the build handler
 import "./marches/service.js"; // registers march_arrive, gather and march_return
 import "./troops/service.js";  // registers the train handler
+import "./research/service.js"; // registers the research handler
 
 const config = loadConfig();
 const app = await buildApp();
@@ -18,6 +19,15 @@ await migrate();
 if (config.autoOpenKingdom && !(await newestOpenKingdom())) {
   const k = await createKingdom({ size: config.kingdomSize });
   app.log.info({ kingdomId: k.id, size: k.size }, "opened the first kingdom");
+}
+
+// A flag that lets any player raise their own hall must never be on quietly. Said once, loudly, at
+// every boot, so it turns up in the deploy log rather than being discovered by a player.
+if (config.devTools && config.production) {
+  app.log.warn(
+    "DEV_TOOLS=on in production: /v1/dev/* is live and any player can raise their own hall to the cap. " +
+    "Fine for a single-player alpha. Remove the variable before a second player joins.",
+  );
 }
 
 const stopWorker = startWorker(10);

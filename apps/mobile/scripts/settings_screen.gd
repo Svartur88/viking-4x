@@ -88,15 +88,34 @@ func _ready() -> void:
 
 
 ## Put this jarl at `level` so a system can be reached without playing to it.
+##
+## Every line after an await is guarded by is_inside_tree(), the same way _confirm_fresh below is.
+## A screen can be freed while a request is in flight — the router frees the whole holder on any
+## navigation — and touching a freed Label afterwards halts the running game in the editor with
+## "previously freed instance". The game window then sits there frozen mid-sentence, which looks
+## like a hang and is really a paused process.
+##
+## `_jumping` stops a second tap starting a second request: the first is still in flight, the
+## server would do the work twice, and the two replies would fight over the label.
+var _jumping := false
+
 func _jump(level: int) -> void:
+	if _jumping:
+		return
+	_jumping = true
 	_jump_note.text = "Jumping to %d..." % level
 	var r: Api.Result = await Api.post_json("/v1/dev/jump", {"level": level})
+	if not is_inside_tree():
+		return
+	_jumping = false
 	if not r.ok:
 		# A 404 here is the production guard doing its job, not a bug. Say which it is.
 		var missing: bool = r.code == "NOT_FOUND" or r.code == "HTTP_404"
 		_jump_note.text = "Not available on this server — it is a testing tool and the live build refuses it." if missing else r.message
 		return
 	var err: String = await Session.refresh_hall()
+	if not is_inside_tree():
+		return
 	if err != "":
 		_jump_note.text = err
 		return

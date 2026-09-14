@@ -120,12 +120,17 @@ export async function registerRoutes(app: FastifyInstance) {
    * 17. Climbing to each by hand before looking at it is ten minutes of clicking per look, every
    * time. This is the button that removes that.
    *
-   * It is refused outright when NODE_ENV=production — not hidden, not gated on a role, refused.
-   * A testing endpoint that raises your own hall to level 30 is a cheat in any live kingdom, and
-   * the only safe place for it is a build that cannot be a live kingdom.
+   * It is refused outright unless `DEV_TOOLS=on` — not hidden, not gated on a role, refused, and
+   * answered before requireAuth so it does not even leak that the route exists. A testing endpoint
+   * that raises your own hall to level 30 is a cheat the moment a second player exists.
+   *
+   * The first version gated on NODE_ENV !== production, which was wrong in practice: during the
+   * alpha the production deploy IS the playtest environment, so the tool was refused on the only
+   * server there was. An explicit flag is the honest axis — someone has to turn it on, and the
+   * boot log complains while it is on in production.
    */
   app.post<{ Body: { level?: number } }>("/v1/dev/jump", async (req, reply) => {
-    if (config.production)
+    if (!config.devTools)
       return reply.code(404).send({ error: { code: "NOT_FOUND", message: "no such route" } });
     const claims = await requireAuth(req);
     const hall = (await pool.query("select id, kingdom_id from halls where player_id=$1", [claims.playerId])).rows[0];

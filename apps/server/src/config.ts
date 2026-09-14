@@ -17,6 +17,19 @@ export interface Config {
   jwtSecret: string;
   /** Open a kingdom on boot when none exists, so a fresh deploy is playable immediately. */
   autoOpenKingdom: boolean;
+  /**
+   * Whether the testing endpoints under /v1/dev are served.
+   *
+   * These let a player raise their own hall to any level. That is a cheat, and the first version of
+   * this gated it on NODE_ENV !== production — which was the right instinct on the wrong axis,
+   * because during the alpha the PRODUCTION deploy is also the only playtest environment. The tool
+   * was therefore refused everywhere it was needed.
+   *
+   * So it is an explicit opt-in: off unless DEV_TOOLS=on. Off by default in production, on by
+   * default anywhere else, and the boot log says loudly when it is on in production so a forgotten
+   * variable cannot quietly hand every future player a cheat.
+   */
+  devTools: boolean;
   kingdomSize: number;
 }
 
@@ -44,6 +57,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     redisUrl,
     jwtSecret,
     autoOpenKingdom: (env.AUTO_OPEN_KINGDOM ?? "true") !== "false",
+    devTools: env.DEV_TOOLS ? env.DEV_TOOLS === "on" : !production,
     kingdomSize: Number(env.KINGDOM_SIZE ?? 600),
   };
 }

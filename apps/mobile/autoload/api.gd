@@ -108,7 +108,22 @@ func _request(method: int, path: String, body: Dictionary) -> Result:
 		Config.clear_session()
 		unauthorized.emit()
 
-	var e: Dictionary = data.get("error", {}) if data.has("error") else {}
+	# An error body is OUR shape only when our own handler produced it. Fastify's built-in 404 answers
+	# {"error": "Not Found", "message": "...", "statusCode": 404} — `error` is a STRING there. So do
+	# a proxy's error page, a gateway timeout, and anything upstream of the app. This line used to
+	# read `var e: Dictionary = data.get("error", {})`, which threw "Trying to assign value of type
+	# 'String' to a variable of type 'Dictionary'" and HALTED THE RUNNING GAME — a frozen window and
+	# a label stuck mid-sentence, for what was only a 404. Never trust the shape of an error.
+	var raw: Variant = data.get("error", null)
+	var e: Dictionary = raw if typeof(raw) == TYPE_DICTIONARY else {}
 	var code := str(e.get("code", "HTTP_%d" % status))
-	var message := str(e.get("message", "Something went wrong."))
+	# Fall back through our shape, then the plain top-level "message" Fastify uses, then the string
+	# form of `error` itself, so the player sees something true rather than "Something went wrong."
+	var message := str(e.get("message", ""))
+	if message == "":
+		message = str(data.get("message", ""))
+	if message == "" and typeof(raw) == TYPE_STRING:
+		message = str(raw)
+	if message == "":
+		message = "Something went wrong."
 	return Result.new(false, status, data, code, message)
