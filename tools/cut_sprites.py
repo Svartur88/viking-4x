@@ -130,6 +130,12 @@ def main() -> int:
     ap.add_argument("--per-row", type=int, default=0,
                     help="sprites per row; splits at density minima instead of empty gaps "
                          "(use for painted sheets whose shadows touch)")
+    ap.add_argument("--trim-strays", action="store_true",
+                    help="keep only the largest contiguous band of content in each cell. Use when a "
+                         "cut comes back with a fragment of the NEXT ROW attached: rows are split at "
+                         "a fixed height, so a tall sprite in row 2 can poke above the line and ride "
+                         "along in row 1's cell. Harmless-looking, and it shifts the sprite's bounds "
+                         "so it scales wrong.")
     ap.add_argument("--grid", action="store_true",
                     help="with --per-row: split each row into equal columns rather than detecting "
                          "where the sprites are. Use when a cut comes back short — smoke, steam or "
@@ -166,6 +172,19 @@ def main() -> int:
                 break
             sub = row_mask[:, x0:x1]
             ys = np.where(sub.any(axis=1))[0]
+            if ys.size > 0 and a.trim_strays:
+                # Keep the densest contiguous run of rows and drop anything detached from it.
+                runs, start = [], ys[0]
+                for i in range(1, ys.size):
+                    if ys[i] != ys[i - 1] + 1:
+                        runs.append((start, ys[i - 1]))
+                        start = ys[i]
+                runs.append((start, ys[-1]))
+                if len(runs) > 1:
+                    best = max(runs, key=lambda r: sub[r[0]:r[1] + 1].sum())
+                    dropped = sum(1 for r in runs if r is not best)
+                    print(f"  {a.names[idx]}: dropped {dropped} stray fragment(s)", file=sys.stderr)
+                    ys = np.arange(best[0], best[1] + 1)
             if ys.size == 0:
                 # An empty span means the split went wrong, not that a sprite is missing. Say which
                 # name went unwritten and skip it — silently falling through here would slide every

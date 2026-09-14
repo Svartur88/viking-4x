@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { authRoutes, requireAuth } from "./auth/routes.js";
 import { signUp } from "./kingdom/service.js";
 import { startUpgrade, upgradeCost, upgradeSeconds, startFounding, foundCost } from "./buildings/service.js";
+import { startResearch, treeFor, levelsFor, BRANCHES } from "./research/service.js";
 import { plotsFor } from "./catalogue.js";
 import { pool } from "./db/pool.js";
 import { signAccess } from "./auth/jwt.js";
@@ -68,6 +69,51 @@ export async function registerRoutes(app: FastifyInstance) {
     const kind = String(req.body?.kind ?? "");
     if (!kind) throw Object.assign(new Error("NO_KIND"), { statusCode: 422 });
     const timer = await startFounding(hall.id, kind, Number(req.body?.slot ?? 0));
+    return { timer, server_now: new Date().toISOString() };
+  });
+
+  /**
+   * The whole research tree plus this hall's levels, in one call (research.md).
+   *
+   * The tree is sent every time rather than cached client-side on purpose: which nodes are blocked
+   * and why changes with the Rune Hall's level, with what else is running, and with every
+   * prerequisite taken. A client holding a stale tree shows a startable node that is not.
+   */
+  app.get("/v1/research", async (req) => {
+    const claims = await requireAuth(req);
+    const hall = (await pool.query("select id from halls where player_id=$1", [claims.playerId])).rows[0];
+    if (!hall) throw Object.assign(new Error("NO_HALL"), { statusCode: 404 });
+    const c = await pool.connect();
+    try {
+      const buildings = (await c.query(
+        "select kind, level from buildings where hall_id=$1 and kind in ('longhouse','rune_hall')", [hall.id],
+      )).rows as { kind: string; level: number }[];
+      const longhouse = buildings.find((b) => b.kind === "longhouse")?.level ?? 0;
+      const runeHall = buildings.find((b) => b.kind === "rune_hall")?.level ?? 0;
+      const running = (await c.query(
+        "select * from timers where hall_id=$1 and kind='research' and state='pending' limit 1", [hall.id],
+      )).rows[0] ?? null;
+      const levels = await levelsFor(c, hall.id);
+      return {
+        branches: BRANCHES,
+        rune_hall: runeHall,
+        longhouse,
+        nodes: treeFor(levels, runeHall, longhouse, running != null),
+        running,
+        server_now: new Date().toISOString(),
+      };
+    } finally {
+      c.release();
+    }
+  });
+
+  app.post<{ Body: { node?: string } }>("/v1/research/start", async (req) => {
+    const claims = await requireAuth(req);
+    const hall = (await pool.query("select id from halls where player_id=$1", [claims.playerId])).rows[0];
+    if (!hall) throw Object.assign(new Error("NO_HALL"), { statusCode: 404 });
+    const node = String(req.body?.node ?? "");
+    if (!node) throw Object.assign(new Error("NO_NODE"), { statusCode: 422 });
+    const timer = await startResearch(hall.id, node);
     return { timer, server_now: new Date().toISOString() };
   });
 

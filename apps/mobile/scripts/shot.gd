@@ -35,6 +35,15 @@ func run(root: Control) -> void:
 	await _settle()
 	_save("city")
 
+	# The Rune Hall, so research can be reviewed without playing to Longhouse 7. Deliberately a
+	# real navigation rather than constructing the screen directly: a screen that only works when
+	# built by hand is a screen no player can reach.
+	root.go("rune_hall")
+	await _settle(1.2)
+	_save("rune-hall")
+	root.go("city")
+	await _settle()
+
 	# Zoom the hall by pushing REAL wheel events rather than calling the handler, because a check
 	# that calls the handler proves only that the handler works. Note Input.parse_input_event does
 	# nothing headless and reports no error; get_viewport().push_input is the one that works.

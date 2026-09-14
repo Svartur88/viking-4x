@@ -11,6 +11,9 @@ extends Control
 signal navigate(screen: String)
 signal notify(message: String)
 
+## Buildings you can walk into, kind -> screen key in root.gd.
+const ENTERABLE := {"rune_hall": "rune_hall"}
+
 const KIND_NAMES := {
 	"longhouse": "Longhouse",
 	"farm": "Farm",
@@ -462,6 +465,18 @@ func _refresh_sheet(rebuild: bool = false) -> void:
 	_sheet.set_meta("shortfall", shortfall)
 
 	_add_training(box, b)
+
+	# Some buildings are doors as well as things to raise. The Rune Hall holds the research tree
+	# (research.md), and DEC-021 will put the mine behind the Quarry the same way. Kept as a lookup
+	# rather than an if-chain so the second one costs a line.
+	var inner: String = ENTERABLE.get(kind, "")
+	if inner != "":
+		var enter := Tokens.button("Enter the %s" % KIND_NAMES.get(kind, kind.capitalize()))
+		enter.pressed.connect(func() -> void:
+			_sheet.visible = false
+			_sheet_building_id = ""
+			navigate.emit(inner))
+		box.add_child(enter)
 
 	var action := Tokens.button("Upgrade")
 	action.disabled = not t.is_empty() or not _can_afford(b)

@@ -9,6 +9,7 @@ const Shot := preload("res://scripts/shot.gd")
 const CityScreen := preload("res://scripts/city_screen.gd")
 const MapScreen := preload("res://scripts/map_screen.gd")
 const SettingsScreen := preload("res://scripts/settings_screen.gd")
+const RuneHallScreen := preload("res://scripts/rune_hall_screen.gd")
 
 var _holder: Control
 var _bar: HBoxContainer
@@ -104,6 +105,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		KEY_1: go("city")
 		KEY_2: go("map")
 		KEY_3: go("settings")
+		KEY_4: go("rune_hall")
 
 
 func go(screen: String) -> void:
@@ -117,6 +119,7 @@ func go(screen: String) -> void:
 		"city": node = CityScreen.new()
 		"map": node = MapScreen.new()
 		"settings": node = SettingsScreen.new()
+		"rune_hall": node = RuneHallScreen.new()
 		_: node = AuthScreen.new()
 	node.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	if node.has_signal("navigate"):
