@@ -74,6 +74,25 @@ def split_at_minima(mask: np.ndarray, count: int) -> list[tuple[int, int]]:
     return [(bounds[i], bounds[i + 1]) for i in range(len(bounds) - 1)]
 
 
+def columns_of_grid(mask: np.ndarray, count: int) -> list[tuple[int, int]]:
+    """Split a row band into `count` equal columns, ignoring the content entirely.
+
+    The fallback for when detection fails, and it does fail: on 2026-09-13 the storehouse and
+    watchtower sheets returned five sprites instead of six because a smoke plume drifted from one
+    sprite across the gap into the next, so the flood fill read two sprites as one blob and
+    `split_at_minima` put a cut inside a building rather than between two.
+
+    It works because the generator lays six sprites out on an even grid, which is the one thing
+    about these sheets that is reliable. Each cell is still trimmed to its own content afterwards,
+    so a sprite narrower than its cell does not gain padding — only the SPLIT is fixed, not the
+    bounds. The cost is that anything genuinely crossing a cell boundary gets clipped, which is
+    why this is opt-in rather than the default.
+    """
+    w = mask.shape[1]
+    edges = [round(i * w / count) for i in range(count + 1)]
+    return [(edges[i], edges[i + 1]) for i in range(count)]
+
+
 def columns_of_content(mask: np.ndarray, min_gap: int) -> list[tuple[int, int]]:
     """Split a row band into sprite columns by looking for empty vertical gaps."""
     cols = mask.any(axis=0)
@@ -111,7 +130,14 @@ def main() -> int:
     ap.add_argument("--per-row", type=int, default=0,
                     help="sprites per row; splits at density minima instead of empty gaps "
                          "(use for painted sheets whose shadows touch)")
+    ap.add_argument("--grid", action="store_true",
+                    help="with --per-row: split each row into equal columns rather than detecting "
+                         "where the sprites are. Use when a cut comes back short — smoke, steam or "
+                         "a banner crossing the gap merges two sprites into one. Each cell is still "
+                         "trimmed to its own content.")
     a = ap.parse_args()
+    if a.grid and not a.per_row:
+        ap.error("--grid needs --per-row to know how many columns to cut")
 
     img = Image.open(a.sheet).convert("RGB")
     rgb = np.asarray(img)
@@ -128,8 +154,12 @@ def main() -> int:
     for r in range(a.rows):
         y0, y1 = r * band, (r + 1) * band
         row_mask = content[y0:y1]
-        spans = (split_at_minima(row_mask, a.per_row) if a.per_row
-                 else columns_of_content(row_mask, a.min_gap))
+        if a.grid:
+            spans = columns_of_grid(row_mask, a.per_row)
+        elif a.per_row:
+            spans = split_at_minima(row_mask, a.per_row)
+        else:
+            spans = columns_of_content(row_mask, a.min_gap)
         for x0, x1 in spans:
             if idx >= len(a.names):
                 print(f"warning: found more sprites than names ({idx + 1} > {len(a.names)})", file=sys.stderr)
@@ -137,14 +167,23 @@ def main() -> int:
             sub = row_mask[:, x0:x1]
             ys = np.where(sub.any(axis=1))[0]
             if ys.size == 0:
+                # An empty span means the split went wrong, not that a sprite is missing. Say which
+                # name went unwritten and skip it — silently falling through here would slide every
+                # later sprite one name to the left, which is worse than a short run.
+                print(f"warning: no content in the span for '{a.names[idx]}'; skipping it",
+                      file=sys.stderr)
+                idx += 1
                 continue
             top, bottom = y0 + ys[0], y0 + ys[-1] + 1
             rgba = np.dstack([rgb[top:bottom, x0:x1], (content[top:bottom, x0:x1] * 255).astype(np.uint8)])
             out.append((a.names[idx], Image.fromarray(rgba, "RGBA")))
             idx += 1
 
-    if idx < len(a.names):
-        print(f"warning: found {idx} sprites, expected {len(a.names)}", file=sys.stderr)
+    # Count what was actually cut, not how far the name list was walked: a skipped empty span
+    # advances idx so the names stay aligned, and must still fail the run.
+    if len(out) < len(a.names):
+        print(f"warning: found {len(out)} sprites, expected {len(a.names)}", file=sys.stderr)
+        print("  a short count usually means two sprites merged — try --grid", file=sys.stderr)
 
     # One scale factor for the whole sheet, so relative sizes survive the cut.
     if out:
@@ -160,7 +199,7 @@ def main() -> int:
         path = os.path.join(a.out_dir, f"{name}.png")
         sprite.save(path)
         print(f"{path}  {sprite.width}x{sprite.height}")
-    return 0 if idx == len(a.names) else 1
+    return 0 if len(out) == len(a.names) else 1
 
 
 if __name__ == "__main__":

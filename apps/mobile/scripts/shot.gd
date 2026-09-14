@@ -8,15 +8,24 @@ var _dir := "/tmp"
 
 
 func run(root: Control) -> void:
+	var device := ""
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--shot="):
 			_dir = arg.substr(7)
+		# --device= reuses a jarl across runs, so a reviewer can alter the world between two shots
+		# (raise every building to 30, say) and photograph the same hall before and after. Without
+		# it every run is a fresh level-1 jarl and high-level art can never be seen.
+		elif arg.begins_with("--device="):
+			device = arg.substr(9)
 
-	Config.device_id = Config._new_device_id()
+	Config.device_id = device if device != "" else Config._new_device_id()
 	Config.jwt = ""
 	var err: String = await Session.start_guest()
 	if err == "":
-		err = await Session.create_player("Skygga%d" % (Time.get_unix_time_from_system() as int % 10000))
+		var made: String = await Session.create_player("Skygga%d" % (Time.get_unix_time_from_system() as int % 10000))
+		# A reused device already has a jarl; that is the point of --device=, not a failure.
+		if made != "" and device == "":
+			err = made
 	if err != "":
 		print("shot: could not sign up: ", err)
 		get_tree().quit(1)

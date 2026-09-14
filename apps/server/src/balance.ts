@@ -53,7 +53,16 @@ export const UPGRADES = {
   timeExponentLate: 2.2,
   /** PR-04: nothing takes longer than seven days, ever. */
   maxSeconds: 7 * 86_400,
-  maxLevel: 20,
+  /**
+   * DEC-023 (2026-09-14): 30, up from 20. Six tiers of building art at five levels each.
+   *
+   * The time curve below has NOT been refitted for it, deliberately — that is a number, and
+   * DEC-015 parks numbers until every system is on screen. The consequence, so nobody reads it as
+   * a bug: with `timeExponentLate` at 2.2 the curve passes seven days around level 20, so levels
+   * ~20-30 all clamp to `maxSeconds` and share an identical base timer. Correct behaviour, flat
+   * progression. Refitting so that 30 is the level that first touches the cap is the balance job.
+   */
+  maxLevel: 30,
 } as const;
 
 /** Resource nodes on the map (map.md rule 6). DEC-016 replaces the flat curves with regions. */

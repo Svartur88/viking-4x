@@ -1,7 +1,28 @@
 # Normalise line endings: LF in the repo, LF on checkout everywhere (silences GitHub Desktop's CRLF warning).
 * text=auto eol=lf
-*.png binary
-*.jpg binary
+
+# Git LFS — big binary files live outside the repo's history (added 2026-09-14).
+#
+# Why: git keeps every version of every file forever. That is free for text and expensive for art.
+# 156 building sprites is 33 MB, and it is the SMALLEST the art will ever be — map tiles, ~60
+# portrait layers, units and ships are still to come. Adding LFS later means rewriting history,
+# so it goes in now.
+#
+# These lines replace the plain `*.png binary` entries that were here before: `filter=lfs` moves the
+# bytes to LFS, and the `-text` on each line keeps the "do not touch line endings" behaviour that
+# `binary` was providing. Fonts stay plain `binary` — there are few of them and they are small.
+#
+# Note: a handful of PNGs committed before this date (the old three-stage sprites) stay in history
+# as ordinary blobs. Converting them would mean rewriting history for a few megabytes, which is not
+# worth it. Everything from here is LFS.
+
+*.png  filter=lfs diff=lfs merge=lfs -text
+*.jpg  filter=lfs diff=lfs merge=lfs -text
+*.jpeg filter=lfs diff=lfs merge=lfs -text
+*.webp filter=lfs diff=lfs merge=lfs -text
+*.psd  filter=lfs diff=lfs merge=lfs -text
+*.wav  filter=lfs diff=lfs merge=lfs -text
+*.ogg  filter=lfs diff=lfs merge=lfs -text
+*.mp3  filter=lfs diff=lfs merge=lfs -text
+
 *.ttf binary
-*.wav binary
-*.ogg binary
