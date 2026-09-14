@@ -7,6 +7,7 @@ signal notify(message: String)
 
 var _url: LineEdit
 var _fresh_note: Label
+var _jump_note: Label
 var _fresh_armed := false
 
 
@@ -53,6 +54,25 @@ func _ready() -> void:
 	_fresh_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(_fresh_note)
 
+	# Jump. Every system now lands deep in the ladder — research at Longhouse 7, the favour ladder
+	# around 13, the Berg branch at 17 — and climbing to each before looking at it is ten minutes of
+	# clicking per look. The server refuses this outright when NODE_ENV=production, so the button
+	# simply reports what the server said rather than hiding itself.
+	box.add_child(Tokens.label("", 8))
+	box.add_child(Tokens.label("Jump to a level — raises the hall, founds everything unlocked, fills the stores", 20, Tokens.TIMBER_LIGHT))
+	var jump_row := HBoxContainer.new()
+	jump_row.add_theme_constant_override("separation", Tokens.GAP)
+	box.add_child(jump_row)
+	for lvl in [7, 13, 17, 30]:
+		var j := Tokens.button(str(lvl), false)
+		j.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		j.custom_minimum_size = Vector2(0, Tokens.TOUCH)
+		j.pressed.connect(_jump.bind(lvl))
+		jump_row.add_child(j)
+	_jump_note = Tokens.label("", 22, Tokens.EMBER)
+	_jump_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(_jump_note)
+
 	box.add_child(Tokens.label("", 12))
 	var out := Tokens.button("Sign out", false)
 	out.pressed.connect(func() -> void:
@@ -65,6 +85,23 @@ func _ready() -> void:
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	box.add_child(spacer)
 	box.add_child(Tokens.label("Viking 4X · walking skeleton · Phase 2", 20, Tokens.TIMBER_LIGHT))
+
+
+## Put this jarl at `level` so a system can be reached without playing to it.
+func _jump(level: int) -> void:
+	_jump_note.text = "Jumping to %d..." % level
+	var r: Api.Result = await Api.post_json("/v1/dev/jump", {"level": level})
+	if not r.ok:
+		# A 404 here is the production guard doing its job, not a bug. Say which it is.
+		var missing: bool = r.code == "NOT_FOUND" or r.code == "HTTP_404"
+		_jump_note.text = "Not available on this server — it is a testing tool and the live build refuses it." if missing else r.message
+		return
+	var err: String = await Session.refresh_hall()
+	if err != "":
+		_jump_note.text = err
+		return
+	_jump_note.text = "Now at Longhouse %d. Everything unlocked is built." % level
+	notify.emit("Jumped to Longhouse %d" % level)
 
 
 func _check() -> void:

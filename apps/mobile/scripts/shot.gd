@@ -38,6 +38,10 @@ func run(root: Control) -> void:
 	# The Rune Hall, so research can be reviewed without playing to Longhouse 7. Deliberately a
 	# real navigation rather than constructing the screen directly: a screen that only works when
 	# built by hand is a screen no player can reach.
+	root.go("settings")
+	await _settle(0.8)
+	_save("settings")
+
 	root.go("rune_hall")
 	await _settle(1.2)
 	_save("rune-hall")

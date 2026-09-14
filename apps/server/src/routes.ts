@@ -3,8 +3,13 @@ import { authRoutes, requireAuth } from "./auth/routes.js";
 import { signUp } from "./kingdom/service.js";
 import { startUpgrade, upgradeCost, upgradeSeconds, startFounding, foundCost } from "./buildings/service.js";
 import { startResearch, treeFor, levelsFor, BRANCHES } from "./research/service.js";
-import { plotsFor } from "./catalogue.js";
+import { plotsFor, CATALOGUE } from "./catalogue.js";
 import { pool } from "./db/pool.js";
+import { loadConfig } from "./config.js";
+import { UPGRADES } from "./balance.js";
+import { randomUUID } from "node:crypto";
+
+const config = loadConfig();
 import { signAccess } from "./auth/jwt.js";
 import { terrainChunk, viewport, overviewPng, overviewMarkers } from "./map/service.js";
 import { settle, ratesFor } from "./economy/service.js";
@@ -105,6 +110,56 @@ export async function registerRoutes(app: FastifyInstance) {
     } finally {
       c.release();
     }
+  });
+
+  /**
+   * DEV ONLY — put this jarl where a system can actually be reached (P2 testing tool).
+   *
+   * Hawk is the only playtester, and every system now lands deep in the ladder: research needs
+   * Longhouse 7 and a Rune Hall, the favour ladder opens around 13 (DEC-025), the Berg branch wants
+   * 17. Climbing to each by hand before looking at it is ten minutes of clicking per look, every
+   * time. This is the button that removes that.
+   *
+   * It is refused outright when NODE_ENV=production — not hidden, not gated on a role, refused.
+   * A testing endpoint that raises your own hall to level 30 is a cheat in any live kingdom, and
+   * the only safe place for it is a build that cannot be a live kingdom.
+   */
+  app.post<{ Body: { level?: number } }>("/v1/dev/jump", async (req, reply) => {
+    if (config.production)
+      return reply.code(404).send({ error: { code: "NOT_FOUND", message: "no such route" } });
+    const claims = await requireAuth(req);
+    const hall = (await pool.query("select id, kingdom_id from halls where player_id=$1", [claims.playerId])).rows[0];
+    if (!hall) throw Object.assign(new Error("NO_HALL"), { statusCode: 404 });
+
+    const level = Math.max(1, Math.min(Number(req.body?.level ?? 10), UPGRADES.maxLevel));
+    const c = await pool.connect();
+    try {
+      await c.query("begin");
+      // Everything already standing goes to the asked-for level, the Longhouse included.
+      await c.query("update buildings set level=$2 where hall_id=$1", [hall.id, level]);
+      // And everything the Longhouse has unlocked gets founded, so there is something to walk into.
+      // `later` kinds stay unbuilt: they are drawn as slots on purpose and founding them would show
+      // a screen that does not exist yet.
+      for (const k of CATALOGUE) {
+        if (k.later || k.unlock > level) continue;
+        await c.query(
+          `insert into buildings (id, kingdom_id, hall_id, kind, slot, level) values ($1,$2,$3,$4,$5,$6)
+           on conflict (hall_id, kind, slot) do update set level = excluded.level`,
+          [randomUUID(), hall.kingdom_id, hall.id, k.kind, k.slot, level],
+        );
+      }
+      // Enough to afford anything without being so large the header reads as broken.
+      await c.query("update halls set grain=5e7, timber=5e7, stone=5e7, iron=5e7 where id=$1", [hall.id]);
+      // Timers left pending would complete later and raise levels past where they were put.
+      await c.query("update timers set state='cancelled' where hall_id=$1 and state='pending'", [hall.id]);
+      await c.query("commit");
+    } catch (e) {
+      await c.query("rollback");
+      throw e;
+    } finally {
+      c.release();
+    }
+    return { ok: true, level, server_now: new Date().toISOString() };
   });
 
   app.post<{ Body: { node?: string } }>("/v1/research/start", async (req) => {
