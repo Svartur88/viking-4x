@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { authRoutes, requireAuth } from "./auth/routes.js";
 import { signUp } from "./kingdom/service.js";
 import { startUpgrade, upgradeCost, upgradeSeconds, startFounding, foundCost } from "./buildings/service.js";
-import { startResearch, treeFor, levelsFor, BRANCHES } from "./research/service.js";
+import { startResearch, treeFor, levelsFor, TREES, WINGS, GEN_GATE } from "./research/service.js";
 import { plotsFor, CATALOGUE } from "./catalogue.js";
 import { pool } from "./db/pool.js";
 import { loadConfig } from "./config.js";
@@ -99,10 +99,16 @@ export async function registerRoutes(app: FastifyInstance) {
         "select * from timers where hall_id=$1 and kind='research' and state='pending' limit 1", [hall.id],
       )).rows[0] ?? null;
       const levels = await levelsFor(c, hall.id);
+      const ordstir = Number(
+        (await c.query("select ordstir from halls where id=$1", [hall.id])).rows[0]?.ordstir ?? 0,
+      );
       return {
-        branches: BRANCHES,
+        trees: TREES,
+        wings: WINGS,
+        gen_gate: GEN_GATE,
         rune_hall: runeHall,
         longhouse,
+        ordstir,
         nodes: treeFor(levels, runeHall, longhouse, running != null),
         running,
         server_now: new Date().toISOString(),
@@ -153,8 +159,14 @@ export async function registerRoutes(app: FastifyInstance) {
           [randomUUID(), hall.kingdom_id, hall.id, k.kind, k.slot, level],
         );
       }
-      // Enough to afford anything without being so large the header reads as broken.
-      await c.query("update halls set grain=5e7, timber=5e7, stone=5e7, iron=5e7 where id=$1", [hall.id]);
+      // Enough to afford anything without being so large the header reads as broken. Orðstír comes
+      // with it: nothing awards renown yet (the raid resolver does not exist), so without this the
+      // Víking and Hirð trees would be on screen and untouchable — which reads as a bug rather than
+      // as "you have not earned this". Remove the ordstir line the day raiding grants it.
+      await c.query(
+        "update halls set grain=5e7, timber=5e7, stone=5e7, iron=5e7, ordstir=250000 where id=$1",
+        [hall.id],
+      );
       // Timers left pending would complete later and raise levels past where they were put.
       await c.query("update timers set state='cancelled' where hall_id=$1 and state='pending'", [hall.id]);
       await c.query("commit");

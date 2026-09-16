@@ -1,14 +1,17 @@
 /**
- * Research (research.md). The same shape as building: gate, cost, queue, timer, handler.
+ * Research (research.md, DEC-028, DEC-029). The same shape as building: gate, cost, queue, timer, handler.
  *
- * Three things are deliberately different from upgrading a building:
+ * Four things are deliberately different from upgrading a building:
  *
- *  - The queue is per HALL, not per node. `research.md` rule 2 allows one research at a time, so
- *    starting Sigð while Njósn is running is refused. The database enforces it (a partial unique
- *    index on timers) rather than trusting this code to check first — two requests arriving
- *    together would both pass a check and both insert.
+ *  - The queue is per HALL, not per tree. `research.md` rule 2 allows one research at a time across
+ *    all ten doors, so starting Sigð while Njósn is running is refused. The database enforces it (a
+ *    partial unique index on timers) rather than trusting this code to check first — two requests
+ *    arriving together would both pass a check and both insert.
  *  - Research does NOT compete with builders. A jarl researching is not a jarl who cannot build;
  *    they are separate queues and always were (`buildings.md`).
+ *  - Two trees are bought with Orðstír and nothing else (DEC-029). Farm output must not buy war
+ *    research — that separation is the whole point — so the price is either resources or renown,
+ *    never a mix, and the renown trees ignore the stores entirely.
  *  - Nothing here applies an effect yet. Every node's `effect` is a string the client prints, and
  *    the levels are recorded faithfully, but no production rate or troop stat reads them. That is
  *    DEC-015 working as intended — the system goes on screen first, and the numbers arrive when
@@ -18,15 +21,22 @@ import type { PoolClient } from "pg";
 import { withTx } from "../db/pool.js";
 import { insertTimer, scheduleTimer, registerHandler, type TimerRow } from "../timers/engine.js";
 import { settleLocked } from "../economy/service.js";
-import { NODES, TIER_GATE, BRANCH_NAMES, researchNode, researchCost, researchSeconds, type Branch } from "./catalogue.js";
+import {
+  NODES, TREES, WINGS, GEN_GATE, researchNode, researchCost, researchSeconds,
+  isRenownTree, type TreeId, type Gen, type ResearchPrice,
+} from "./catalogue.js";
 
 export interface ResearchView {
-  id: string; name: string; gloss: string; branch: Branch; tier: 1 | 2 | 3;
+  id: string; name: string; gloss: string; blurb: string;
+  tree: TreeId; gen: Gen;
   level: number; max_level: number; effect: string;
+  /** Parent node ids — the client draws the descent from these and computes nothing. */
   needs: string[];
+  /** Child node ids, so the sheet can say what this one opens without scanning the array. */
+  opens: string[];
   /** Why the player cannot start it right now, or null when they can. */
   blocked: string | null;
-  cost: { grain: number; timber: number; stone: number; iron: number } | null;
+  cost: ResearchPrice | null;
   seconds: number | null;
   later: boolean;
 }
@@ -39,8 +49,18 @@ export async function levelsFor(c: PoolClient, hallId: string): Promise<Record<s
   return out;
 }
 
+/** Children by parent id, computed once at import rather than per request. */
+const CHILDREN = new Map<string, string[]>();
+for (const n of NODES) {
+  for (const p of n.needs) {
+    const list = CHILDREN.get(p);
+    if (list) list.push(n.id);
+    else CHILDREN.set(p, [n.id]);
+  }
+}
+
 /**
- * The whole tree plus this hall's state, in one payload.
+ * The whole hall plus this hall's state, in one payload.
  *
  * The client is told WHY a node is unavailable rather than just that it is, because "Rune Hall 6"
  * is a thing a player can act on and a greyed-out box is not.
@@ -53,7 +73,7 @@ export function treeFor(
 ): ResearchView[] {
   return NODES.map((n) => {
     const level = levels[n.id] ?? 0;
-    const gate = TIER_GATE[n.tier];
+    const gate = GEN_GATE[n.gen];
     const toLevel = level + 1;
     const maxed = level >= n.maxLevel;
 
@@ -63,16 +83,18 @@ export function treeFor(
     else if (runeHall < gate.runeHall) blocked = `Needs Rune Hall ${gate.runeHall}`;
     else if (longhouse < gate.longhouse) blocked = `Needs Longhouse ${gate.longhouse}`;
     else {
-      const missing = (n.needs ?? []).filter((d) => (levels[d] ?? 0) < 1);
+      const missing = n.needs.filter((d) => (levels[d] ?? 0) < 1);
       if (missing.length) {
         const names = missing.map((d) => researchNode(d)?.name ?? d).join(", ");
-        blocked = `Needs ${names}`;
+        blocked = `Comes of ${names}`;
       } else if (busy) blocked = "Another research is running";
     }
 
     return {
-      id: n.id, name: n.name, gloss: n.gloss, branch: n.branch, tier: n.tier,
-      level, max_level: n.maxLevel, effect: n.effect, needs: n.needs ?? [],
+      id: n.id, name: n.name, gloss: n.gloss, blurb: n.blurb,
+      tree: n.tree, gen: n.gen,
+      level, max_level: n.maxLevel, effect: n.effect,
+      needs: n.needs, opens: CHILDREN.get(n.id) ?? [],
       blocked,
       cost: maxed || n.later ? null : researchCost(n, toLevel),
       seconds: maxed || n.later ? null : researchSeconds(n, toLevel),
@@ -81,7 +103,7 @@ export function treeFor(
   });
 }
 
-export const BRANCHES = BRANCH_NAMES;
+export { TREES, WINGS, GEN_GATE };
 
 export async function startResearch(hallId: string, nodeId: string) {
   const node = researchNode(nodeId);
@@ -99,7 +121,7 @@ export async function startResearch(hallId: string, nodeId: string) {
     const longhouse = buildings.find((b) => b.kind === "longhouse")?.level ?? 0;
     const runeHall = buildings.find((b) => b.kind === "rune_hall")?.level ?? 0;
 
-    const gate = TIER_GATE[node.tier];
+    const gate = GEN_GATE[node.gen];
     if (runeHall < gate.runeHall)
       throw Object.assign(new Error("RUNE_HALL_GATE"), { statusCode: 422, details: { needs: gate.runeHall, have: runeHall } });
     if (longhouse < gate.longhouse)
@@ -108,19 +130,31 @@ export async function startResearch(hallId: string, nodeId: string) {
     const levels = await levelsFor(c, hallId);
     const level = levels[node.id] ?? 0;
     if (level >= node.maxLevel) throw Object.assign(new Error("MAX_LEVEL"), { statusCode: 422 });
-    for (const d of node.needs ?? []) {
+    for (const d of node.needs) {
       if ((levels[d] ?? 0) < 1)
         throw Object.assign(new Error("PREREQUISITE"), { statusCode: 422, details: { needs: d } });
     }
 
     const toLevel = level + 1;
     const cost = researchCost(node, toLevel);
-    if (hall.grain < cost.grain || hall.timber < cost.timber || hall.stone < cost.stone || hall.iron < cost.iron)
-      throw Object.assign(new Error("INSUFFICIENT"), { statusCode: 422, details: cost });
-    await c.query(
-      "update halls set grain=grain-$2, timber=timber-$3, stone=stone-$4, iron=iron-$5 where id=$1",
-      [hallId, cost.grain, cost.timber, cost.stone, cost.iron],
-    );
+
+    if (isRenownTree(node.tree)) {
+      // Renown is not a resource and does not live with the stores. It is earned a-viking and spent
+      // here, and no amount of grain substitutes for it (DEC-029).
+      const ordstir = Number(
+        (await c.query("select ordstir from halls where id=$1", [hallId])).rows[0]?.ordstir ?? 0,
+      );
+      if (ordstir < cost.ordstir)
+        throw Object.assign(new Error("INSUFFICIENT_ORDSTIR"), { statusCode: 422, details: { needs: cost.ordstir, have: ordstir } });
+      await c.query("update halls set ordstir = ordstir - $2 where id=$1", [hallId, cost.ordstir]);
+    } else {
+      if (hall.grain < cost.grain || hall.timber < cost.timber || hall.stone < cost.stone || hall.iron < cost.iron)
+        throw Object.assign(new Error("INSUFFICIENT"), { statusCode: 422, details: cost });
+      await c.query(
+        "update halls set grain=grain-$2, timber=timber-$3, stone=stone-$4, iron=iron-$5 where id=$1",
+        [hallId, cost.grain, cost.timber, cost.stone, cost.iron],
+      );
+    }
 
     // One at a time: the partial unique index on timers raises a 23505 if another is pending. Let
     // it, and translate — checking first would race two simultaneous requests through.
