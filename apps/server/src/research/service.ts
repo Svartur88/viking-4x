@@ -29,6 +29,8 @@ import {
 export interface ResearchView {
   id: string; name: string; gloss: string; blurb: string;
   tree: TreeId; gen: Gen;
+  /** Younger Futhark codepoint — the placeholder mark the client carves on the stone. */
+  rune: number;
   level: number; max_level: number; effect: string;
   /** Parent node ids — the client draws the descent from these and computes nothing. */
   needs: string[];
@@ -92,7 +94,7 @@ export function treeFor(
 
     return {
       id: n.id, name: n.name, gloss: n.gloss, blurb: n.blurb,
-      tree: n.tree, gen: n.gen,
+      tree: n.tree, gen: n.gen, rune: n.rune,
       level, max_level: n.maxLevel, effect: n.effect,
       needs: n.needs, opens: CHILDREN.get(n.id) ?? [],
       blocked,
