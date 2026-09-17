@@ -14,7 +14,7 @@ import { signAccess } from "./auth/jwt.js";
 import { terrainChunk, viewport, overviewPng, overviewMarkers } from "./map/service.js";
 import { settle, ratesFor } from "./economy/service.js";
 import { sendGather, recall, activeMarches, marchSlots } from "./marches/service.js";
-import { startTraining, stacksAt, troopCapacity, troopsCommitted, UNITS, TRAINS } from "./troops/service.js";
+import { startTraining, stacksAt, troopCapacity, troopsCommitted, benchFor, KINDS, TRAINS } from "./troops/service.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   await authRoutes(app);
@@ -58,9 +58,12 @@ export async function registerRoutes(app: FastifyInstance) {
       troops: await stacksAt(hall.id),
       troop_capacity: troopCapacity(barracks),
       troops_committed: await troopsCommitted(pool, hall.id),
-      unit_costs: UNITS,
-      // Which building trains whom, sent rather than mirrored: the client had its own copy and two
-      // copies of the same table disagree eventually.
+      // The whole roster, sent rather than mirrored: the client had its own copy once and two
+      // copies of the same table disagree eventually. Names included — they are still being judged.
+      troop_kinds: KINDS.map((k) => ({
+        type: k.id, name: k.name, gloss: k.gloss, field: k.field, beats: k.beats,
+        trained_at: k.trainedAt, tiers: k.tiers, unlock: k.unlock, blurb: k.blurb,
+      })),
       trains: TRAINS,
       server_now: new Date().toISOString(),
     };
@@ -159,14 +162,8 @@ export async function registerRoutes(app: FastifyInstance) {
           [randomUUID(), hall.kingdom_id, hall.id, k.kind, k.slot, level],
         );
       }
-      // Enough to afford anything without being so large the header reads as broken. Orðstír comes
-      // with it: nothing awards renown yet (the raid resolver does not exist), so without this the
-      // Víking and Hirð trees would be on screen and untouchable — which reads as a bug rather than
-      // as "you have not earned this". Remove the ordstir line the day raiding grants it.
-      await c.query(
-        "update halls set grain=5e7, timber=5e7, stone=5e7, iron=5e7, ordstir=250000 where id=$1",
-        [hall.id],
-      );
+      // Enough to afford anything without being so large the header reads as broken.
+      await c.query("update halls set grain=5e7, timber=5e7, stone=5e7, iron=5e7 where id=$1", [hall.id]);
       // Timers left pending would complete later and raise levels past where they were put.
       await c.query("update timers set state='cancelled' where hall_id=$1 and state='pending'", [hall.id]);
       await c.query("commit");
@@ -226,13 +223,31 @@ export async function registerRoutes(app: FastifyInstance) {
     return viewport(claims.kingdomId!, { x0: Number(q.x0), y0: Number(q.y0), x1: Number(q.x1), y1: Number(q.y1) }, claims.playerId);
   });
 
-  // Training (P3.T01). One queue per training building, as the builders work.
-  app.post<{ Params: { id: string }; Body: { count?: number; tier?: number } }>("/v1/buildings/:id/train", async (req) => {
+  // What a training building can put on its bench: every kind it trains, the tiers this level has
+  // opened, and what one costs. The Shipyard has six hulls; the Barracks one kind of man.
+  app.get<{ Params: { id: string } }>("/v1/buildings/:id/bench", async (req) => {
+    const claims = await requireAuth(req);
+    const hall = (await pool.query("select id from halls where player_id=$1", [claims.playerId])).rows[0];
+    if (!hall) throw Object.assign(new Error("NO_HALL"), { statusCode: 404 });
+    const b = (await pool.query("select kind, level from buildings where id=$1 and hall_id=$2",
+      [req.params.id, hall.id])).rows[0];
+    if (!b) throw Object.assign(new Error("NO_BUILDING"), { statusCode: 404 });
+    return {
+      building: b.kind, level: b.level,
+      bench: benchFor(b.kind, Number(b.level ?? 0)),
+      server_now: new Date().toISOString(),
+    };
+  });
+
+  // Training (P3.T01). One queue per training building, as the builders work. The type is required
+  // where a building trains more than one kind, and may be omitted where it trains exactly one.
+  app.post<{ Params: { id: string }; Body: { count?: number; tier?: number; type?: string } }>("/v1/buildings/:id/train", async (req) => {
     const claims = await requireAuth(req);
     const hall = (await pool.query("select id from halls where player_id=$1", [claims.playerId])).rows[0];
     if (!hall) throw Object.assign(new Error("NO_HALL"), { statusCode: 404 });
     const count = Math.floor(Number(req.body?.count ?? 0));
-    const timer = await startTraining(hall.id, req.params.id, count, Math.floor(Number(req.body?.tier ?? 1)));
+    const timer = await startTraining(
+      hall.id, req.params.id, count, Math.floor(Number(req.body?.tier ?? 1)), req.body?.type);
     return { timer, server_now: new Date().toISOString() };
   });
 

@@ -571,43 +571,27 @@ func _on_upgrade() -> void:
 ## what they cost beat a number you have to reason about before you know what a Shieldwall is.
 func _add_training(box: VBoxContainer, b: Dictionary) -> void:
 	var kind := str(b.get("kind", ""))
-	var type := str(Session.trains.get(kind, ""))
-	if type == "":
+	var trains: Variant = Session.trains.get(kind, [])
+	if typeof(trains) != TYPE_ARRAY or (trains as Array).is_empty():
 		return
-	var unit: String = UNIT_NAMES.get(type, type.capitalize())
 	var id := str(b.get("id", ""))
 
 	box.add_child(Tokens.label("", 8))
-	box.add_child(Tokens.label("Train %s" % unit, 28, Tokens.BONE))
-
 	var t: Dictionary = Session.training_timer_for(id)
 	if not t.is_empty():
 		var left := _countdown(Api.seconds_until(str(t.get("due_at", ""))))
 		var payload: Dictionary = t.get("payload", {})
 		box.add_child(Tokens.label("%d in training  ·  ready in %s" % [
 			int(payload.get("count", 0)), left], 24, Tokens.FIRE))
-		return
 
-	var room: int = Session.troop_capacity - Session.troops_committed
-	if room <= 0:
-		box.add_child(Tokens.label("The barracks is full. Upgrade it to hold more.", 24, Tokens.EMBER))
-		return
-
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", Tokens.GAP)
-	box.add_child(row)
-	for batch: int in [5, 20, 50]:
-		var n: int = mini(batch, room)
-		var button := Tokens.button("%d" % n, batch == 20)
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.disabled = not _can_pay_for(kind, n)
-		button.pressed.connect(func() -> void:
-			button.disabled = true
-			var err: String = await Session.train(id, n)
-			notify.emit(err if err != "" else "%d %s are training." % [n, unit.to_lower()]))
-		row.add_child(button)
-
-	box.add_child(Tokens.label(_train_cost_text(kind, 5), 22, Tokens.TIMBER_LIGHT))
+	# Recruiting moved out of this sheet on 2026-09-17. A Shipyard has six hulls on its bench and
+	# every kind has ten named rungs — that is a room, not three buttons under a building card.
+	var muster := Tokens.button("Muster")
+	muster.pressed.connect(func() -> void:
+		_sheet.visible = false
+		_sheet_building_id = ""
+		navigate.emit("mustering:" + id))
+	box.add_child(muster)
 
 
 ## Per-man cost, straight from the server's own table so it cannot drift from what is charged.

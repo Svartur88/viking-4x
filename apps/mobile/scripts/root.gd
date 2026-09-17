@@ -10,6 +10,7 @@ const CityScreen := preload("res://scripts/city_screen.gd")
 const MapScreen := preload("res://scripts/map_screen.gd")
 const SettingsScreen := preload("res://scripts/settings_screen.gd")
 const RuneHallScreen := preload("res://scripts/rune_hall_screen.gd")
+const MusteringScreen := preload("res://scripts/mustering_screen.gd")
 
 var _holder: Control
 var _bar: HBoxContainer
@@ -115,12 +116,19 @@ func go(screen: String) -> void:
 	for child in _holder.get_children():
 		child.queue_free()
 	var node: Control
-	match screen:
-		"city": node = CityScreen.new()
-		"map": node = MapScreen.new()
-		"settings": node = SettingsScreen.new()
-		"rune_hall": node = RuneHallScreen.new()
-		_: node = AuthScreen.new()
+	# Mustering is the one screen that needs to know WHICH building was entered, so it carries the id
+	# in the route: "mustering:<uuid>". Everything else is a plain screen name.
+	if screen.begins_with("mustering:"):
+		var muster := MusteringScreen.new()
+		muster.building_id = screen.substr(10)
+		node = muster
+	else:
+		match screen:
+			"city": node = CityScreen.new()
+			"map": node = MapScreen.new()
+			"settings": node = SettingsScreen.new()
+			"rune_hall": node = RuneHallScreen.new()
+			_: node = AuthScreen.new()
 	node.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	if node.has_signal("navigate"):
 		node.navigate.connect(go)
