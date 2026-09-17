@@ -97,9 +97,27 @@ export function troopCapacity(barracksLevel: number): number {
 export async function stacksAt(hallId: string) {
   const { rows } = await pool.query(
     "select type, tier, count from troops where hall_id=$1 and count > 0 order by type, tier", [hallId]);
-  return rows.map((r: { type: string; tier: number; count: string }) => ({
-    type: r.type as TroopType, tier: r.tier, count: Number(r.count), carry: carryOf(r.type as TroopType, r.tier),
-  }));
+  // A stack whose type the catalogue no longer knows is SKIPPED, never thrown on. This is
+  // load-bearing: stacksAt feeds GET /v1/hall, so one retired name used to 404 the entire hall, and
+  // the client read that 404 as "this player has no hall" and offered a new character (17 Sep,
+  // after DEC-030 deleted the Shieldwall). Retiring a troop type is an ordinary thing to do and
+  // must never lock a player out of the game. Migration 0006 renames the existing data; this is
+  // what makes the next retirement harmless.
+  return rows.flatMap((r: { type: string; tier: number; count: string }) => {
+    if (!troopKind(r.type)) return [];
+    return [{
+      type: r.type as TroopType, tier: r.tier, count: Number(r.count), carry: carryOf(r.type as TroopType, r.tier),
+    }];
+  });
+}
+
+/** Stacks sitting in a hall under a name the catalogue has retired. A report, nothing more — the
+ *  hall ignores them and a migration is what actually clears them. Here so the condition is
+ *  visible instead of silent. */
+export async function orphanStacksAt(hallId: string) {
+  const { rows } = await pool.query(
+    "select type, tier, count from troops where hall_id=$1 and count > 0", [hallId]);
+  return rows.filter((r: { type: string }) => !troopKind(r.type));
 }
 
 /** Everything that counts against capacity: at home, in training, and away on a march. */

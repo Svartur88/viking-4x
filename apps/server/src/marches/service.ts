@@ -19,17 +19,22 @@ import { pool, withTx } from "../db/pool.js";
 import { insertTimer, scheduleTimer, registerHandler, type TimerRow } from "../timers/engine.js";
 import { settleLocked, ratesFor } from "../economy/service.js";
 import { nodeRatePerHour } from "../nodes/service.js";
-import { carryOf, adjustStack, type TroopType } from "../troops/service.js";
+import { carryOf, adjustStack, troopKind, type TroopType } from "../troops/service.js";
 import { COMPRESSED_CLOCK, MARCH_SLOTS } from "../balance.js";
 
 /**
  * What a crew can haul: the sum of its troops' carry (units.md rule 6). Composition is keyed
- * "type:tier" so a stack of T2 Shieldwall is distinct from T1 without a second column.
+ * "type:tier" so a stack of T2 Berserkur is distinct from T1 without a second column.
+ *
+ * A key whose type the catalogue has retired contributes nothing and does NOT throw — same rule as
+ * stacksAt, and for the same reason: a march in flight when a type is retired must still be able to
+ * arrive. See migration 0006 and DEC-030.
  */
 export function carryOfCrew(composition: Record<string, number>): number {
   let total = 0;
   for (const [key, n] of Object.entries(composition)) {
     const [type, tier] = key.split(":");
+    if (!troopKind(type)) continue;
     total += carryOf(type as TroopType, Number(tier || 1)) * Number(n);
   }
   return total;
@@ -246,6 +251,9 @@ async function onMarchReturn(c: PoolClient, t: TimerRow) {
   // The men come home too.
   for (const [key, n] of Object.entries(march.composition ?? {})) {
     const [type, tier] = key.split(":");
+    // Men of a retired type do not come home — there is no stack left to put them in. Dropped
+    // rather than thrown, so one stale march cannot wedge the timer engine for every player.
+    if (!troopKind(type)) continue;
     await adjustStack(c, march.hall_id, march.kingdom_id, type, Number(tier), Number(n));
   }
   await c.query("update marches set state='done', completed_at=now() where id=$1", [march.id]);
